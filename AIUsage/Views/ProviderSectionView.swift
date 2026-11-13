@@ -1,56 +1,108 @@
 import AppKit
 import SwiftUI
 
+enum ProviderSectionPart { case all, summary, details }
+
 struct ProviderSectionView: View {
     let state: ProviderState
     let displayMode: UsageDisplayMode
+    let embedded: Bool
+    let expandedOverride: Bool?
+    let part: ProviderSectionPart
+    let onToggle: (() -> Void)?
+    @State private var isExpanded = false
+    private var showsDetails: Bool { expandedOverride ?? isExpanded }
 
     init(
         state: ProviderState,
-        displayMode: UsageDisplayMode = .used
+        displayMode: UsageDisplayMode = .used,
+        embedded: Bool = false,
+        expandedOverride: Bool? = nil,
+        part: ProviderSectionPart = .all,
+        onToggle: (() -> Void)? = nil
     ) {
         self.state = state
         self.displayMode = displayMode
+        self.embedded = embedded
+        self.expandedOverride = expandedOverride
+        self.part = part
+        self.onToggle = onToggle
     }
 
     var body: some View {
+        Group {
+            if embedded {
+                content
+            } else {
+                content.background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+            }
+        }
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
-            providerHeader
+            if part != .details { providerHeader }
+            if part != .details, !embedded, let scope = state.snapshot?.dashboardSubtitle {
+                Text(scope)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 5)
+            }
             if let snapshot = state.snapshot, snapshot.hasPanelContent {
-                if !snapshot.windows.isEmpty {
-                    QuotaGrid(
-                        windows: snapshot.windows,
-                        displayMode: displayMode
-                    )
-                    .padding(.horizontal, 10)
-                    .padding(.bottom, 6)
+                let ordered = ProviderDetailsLayout.windows(snapshot, expanded: true)
+                let windows = part == .summary ? Array(ordered.prefix(2)) : part == .details ? Array(ordered.dropFirst(2)) : ProviderDetailsLayout.windows(snapshot, expanded: showsDetails)
+                if !windows.isEmpty {
+                    QuotaGrid(windows: windows, displayMode: displayMode)
+                        .padding(.horizontal, 10)
+                        .padding(.bottom, 6)
                 }
-                if let billingUsage = snapshot.billingUsage {
-                    BillingUsageRow(
-                        usage: billingUsage,
-                        displayMode: displayMode
-                    )
+                if part == .details || (part == .all && showsDetails) {
+                    if !snapshot.consumptionShares.isEmpty {
+                        ConsumedUsageBreakdown(shares: snapshot.consumptionShares)
+                    }
+                    if (!snapshot.windows.isEmpty || !snapshot.consumptionShares.isEmpty) &&
+                        (snapshot.hasAdditionalUsageSection || (snapshot.resets?.availableCount ?? 0) > 0 || !snapshot.usageDetails.isEmpty) {
+                        Divider()
+                            .padding(.horizontal, 20)
+                            .padding(.top, 2)
+                            .padding(.bottom, 10)
+                    }
+                    if snapshot.hasAdditionalUsageSection {
+                        AdditionalUsageSection(snapshot: snapshot, displayMode: displayMode)
+                    }
+                    ForEach(snapshot.usageDetails) { detail in
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(detail.title).foregroundStyle(.secondary)
+                            Spacer(minLength: 8)
+                            Text(detail.value).monospacedDigit().multilineTextAlignment(.trailing)
+                        }
+                        .font(.caption)
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 8)
+                    }
+                    if let resets = snapshot.resets, resets.availableCount > 0 {
+                        ResetsRow(resets: resets)
+                    }
                 }
-                if let resets = snapshot.resets, resets.availableCount > 0 {
-                    ResetsRow(resets: resets)
-                }
-            } else if state.isRefreshing {
+            } else if part != .details, state.isRefreshing {
                 ProviderStatusRow(
                     message: "Checking local login…",
                     showsProgress: true
                 )
-            } else if let failure = state.failure {
+            } else if part != .details, let failure = state.failure {
                 FailureRow(failure: failure)
                     .padding(.horizontal, 14)
                     .padding(.bottom, 14)
-            } else {
+            } else if part != .details {
                 ProviderStatusRow(
                     message: "No quota data yet.",
                     systemImage: "chart.bar.xaxis"
                 )
             }
 
-            if state.isStale, let failure = state.failure {
+            if part != .details, state.isStale, let failure = state.failure {
                 Label(failure.message, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption2)
                     .foregroundStyle(UsagePalette.warning)
@@ -60,29 +112,42 @@ struct ProviderSectionView: View {
                     .padding(.bottom, 12)
             }
         }
-        .glassEffect(.regular, in: .rect(cornerRadius: 18))
     }
 
     private var providerHeader: some View {
         HStack(spacing: 9) {
-            ProviderIcon(provider: state.provider, size: 18)
-                .foregroundStyle(.primary)
-                .frame(width: 18, height: 18)
+            if state.snapshot?.xSubscription != nil {
+                Text("𝕏").font(.title3).frame(width: 18, height: 18)
+            } else {
+                ProviderIcon(provider: state.provider, size: 18)
+                    .foregroundStyle(.primary)
+                    .frame(width: 18, height: 18)
+            }
 
-            Text(state.provider.displayName)
-                .font(.headline.weight(.semibold))
+            ProviderDisclosureTitle(
+                title: state.snapshot?.displayName ?? state.provider.displayName,
+                isExpanded: Binding(get: { showsDetails }, set: { value in
+                    if let onToggle { onToggle() } else { isExpanded = value }
+                }),
+                canExpand: !embedded && state.snapshot.map(ProviderDetailsLayout.canExpand) == true
+            )
+            .layoutPriority(1)
 
             Spacer(minLength: 8)
 
-            if let plan = state.snapshot?.planName {
+            if !embedded, let email = state.snapshot?.identityEmail {
+                AccountEmailLabel(email: email)
+            }
+            if !embedded, let plan = state.snapshot?.planName {
                 Text(plan)
                     .font(.caption2.weight(.medium))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
-                    .glassEffect(.clear, in: .capsule)
+                    .background(.primary.opacity(0.06), in: Capsule())
                     .accessibilityLabel("Plan \(plan)")
+                    .fixedSize(horizontal: true, vertical: false)
             }
         }
         .padding(.horizontal, 14)
@@ -177,6 +242,7 @@ struct BillingUsagePresentation: Equatable {
 private struct BillingUsageRow: View {
     let usage: BillingUsage
     let displayMode: UsageDisplayMode
+    var titleOverride: String? = nil
 
     var body: some View {
         let presentation = BillingUsagePresentation(
@@ -190,7 +256,7 @@ private struct BillingUsageRow: View {
                 .foregroundStyle(.tertiary)
                 .frame(width: 14, height: 14)
 
-            Text(presentation.title)
+            Text(titleOverride ?? presentation.title)
                 .foregroundStyle(.secondary)
 
             Spacer(minLength: 8)
@@ -246,7 +312,11 @@ struct ResetsPresentation: Equatable {
         timeZone: TimeZone = .current
     ) {
         let active = resets.active(at: now)
-        valueText = "\(active.availableCount) available"
+        if let usable = active.usableCount, usable != active.availableCount {
+            valueText = "\(active.availableCount) available · \(usable) usable now"
+        } else {
+            valueText = "\(active.availableCount) available"
+        }
 
         if let next = active.nextExpiration,
            let countdown = CompactCountdown.text(until: next, from: now) {
@@ -278,8 +348,10 @@ struct ResetsPresentation: Equatable {
 private struct ResetsRow: View {
     let resets: UsageResets
 
+    @Environment(\.usagePanelVisible) private var isPanelVisible
+
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 60)) { context in
+        TimelineView(UsageMinuteSchedule(isActive: isPanelVisible)) { context in
             let presentation = ResetsPresentation(
                 resets: resets,
                 now: context.date
@@ -333,24 +405,11 @@ private struct QuotaGrid: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ForEach(Array(rows.enumerated()), id: \.offset) { rowIndex, row in
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                 HStack(spacing: 0) {
-                    ForEach(Array(row.enumerated()), id: \.element.id) { columnIndex, window in
+                    ForEach(row) { window in
                         QuotaTile(window: window, displayMode: displayMode)
-
-                        if columnIndex == 0, row.count == 2 {
-                            Color(nsColor: .separatorColor)
-                                .opacity(0.42)
-                                .frame(width: 0.5, height: 48)
-                        }
                     }
-                }
-
-                if rowIndex < rows.count - 1 {
-                    Color(nsColor: .separatorColor)
-                        .opacity(0.42)
-                        .frame(height: 0.5)
-                        .padding(.horizontal, 6)
                 }
             }
         }
@@ -367,8 +426,10 @@ private struct QuotaTile: View {
     let window: QuotaWindow
     let displayMode: UsageDisplayMode
 
+    @Environment(\.usagePanelVisible) private var isPanelVisible
+
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 60)) { context in
+        TimelineView(UsageMinuteSchedule(isActive: isPanelVisible)) { context in
             VStack(alignment: .leading, spacing: 5) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(window.kind.title)
@@ -433,13 +494,7 @@ private struct QuotaTile: View {
         return "\(value.formatted(.number.precision(.fractionLength(1))))%"
     }
 
-    private var valueTint: Color {
-        switch window.usedPercent {
-        case 85...: UsagePalette.critical
-        case 60..<85: UsagePalette.warning
-        default: Color(nsColor: .labelColor)
-        }
-    }
+    private var valueTint: Color { UsageSeverity(usedPercent: window.usedPercent).color }
 
     private var progressTint: Color {
         switch window.usedPercent {
@@ -470,9 +525,11 @@ private struct ProviderStatusRow: View {
     var systemImage: String?
     var showsProgress = false
 
+    @Environment(\.usagePanelVisible) private var isPanelVisible
+
     var body: some View {
         HStack(spacing: 8) {
-            if showsProgress {
+            if showsProgress && isPanelVisible {
                 ProgressView()
                     .controlSize(.small)
                     .frame(width: 14, height: 14)
@@ -535,6 +592,245 @@ private struct FailureRow: View {
             "hourglass"
         case .transient, .invalidResponse, .storage:
             "exclamationmark.triangle"
+        }
+    }
+}
+
+private enum ConsumptionShareColor {
+    static func color(_ product: String) -> Color {
+        switch product {
+        case "cursor", "claude_code": Color(nsColor: .systemBlue)
+        case "grok-chat", "chat": Color(nsColor: .systemPurple)
+        case "grok-tasks", "cowork": Color(nsColor: .systemTeal)
+        case "other": Color(nsColor: .systemGray)
+        default: Color(nsColor: .systemOrange)
+        }
+    }
+}
+
+private struct ConsumedUsageBreakdown: View {
+    let shares: [ConsumptionShare]
+    private var visibleShares: [ConsumptionShare] { shares.filter { $0.percent > 0 } }
+    private var total: Double { shares.reduce(0) { $0 + $1.percent } }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Share of usage consumed")
+                .foregroundStyle(.primary)
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(.primary.opacity(0.1))
+                    HStack(spacing: 0) {
+                        ForEach(visibleShares) { product in
+                            ConsumptionShareColor.color(product.id)
+                                .frame(width: total > 0 ? geometry.size.width * product.percent / total : 0)
+                        }
+                    }
+                    .clipShape(Capsule())
+                }
+            }
+            .frame(height: 4)
+            .accessibilityHidden(true)
+            WrappingHStack(spacing: 12, lineSpacing: 6) {
+                ForEach(visibleShares) { product in
+                    HStack(spacing: 4) {
+                        Circle().fill(ConsumptionShareColor.color(product.id)).frame(width: 5, height: 5)
+                        Text(product.title).foregroundStyle(.secondary)
+                        Text(total > 0 ? product.percent.formatted(.number.precision(.fractionLength(1))) + "%" : "0%")
+                            .monospacedDigit().foregroundStyle(.primary)
+                    }
+                    .accessibilityElement(children: .combine)
+                }
+            }
+            if total == 0 {
+                Text("No weekly usage recorded yet").foregroundStyle(.secondary)
+            }
+        }
+        .font(.caption)
+        .padding(.horizontal, 20)
+        .padding(.bottom, 10)
+        .help("Product shares add up to the weekly usage already consumed, not your entire weekly allowance. Shares stay the same in Left and Used modes.")
+    }
+}
+
+struct AdditionalUsageSection: View {
+    let snapshot: ProviderSnapshot
+    let displayMode: UsageDisplayMode
+
+    private var billing: BillingUsage? { snapshot.displayedBillingUsage }
+    private var enabled: Bool? { snapshot.additionalUsageEnabled ?? snapshot.xSubscription?.additionalUsageEnabled }
+    private var reset: Date? { snapshot.xSubscription?.additionalUsageResetsAt }
+    private var fraction: Double? {
+        guard case let .boundedSpend(used, limit, _) = billing,
+              used.isFinite, limit.isFinite, limit > 0 else { return nil }
+        let consumed = min(max(used / limit, 0), 1)
+        return displayMode == .used ? consumed : 1 - consumed
+    }
+
+    @Environment(\.usagePanelVisible) private var isPanelVisible
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Additional Usage").fontWeight(.medium)
+                Spacer(minLength: 8)
+                if let balance = snapshot.displayedBalance {
+                    HStack(spacing: 4) {
+                        Text("Balance").foregroundStyle(.secondary)
+                        Text(balance.amount, format: .currency(code: balance.currencyCode))
+                            .monospacedDigit().fontWeight(.medium)
+                    }
+                }
+                if enabled == false {
+                    Text("Off").foregroundStyle(.secondary)
+                } else if billing == nil && snapshot.displayedBalance == nil {
+                    Text("Unavailable").foregroundStyle(.secondary)
+                }
+            }
+            if let billing, enabled != false {
+                let presentation = BillingUsagePresentation(usage: billing, displayMode: displayMode)
+                HStack {
+                    Text("Monthly spend").foregroundStyle(.secondary)
+                    Spacer(minLength: 8)
+                    Text(presentation.valueText).monospacedDigit().lineLimit(1).minimumScaleFactor(0.75)
+                }
+                if let fraction {
+                    GeometryReader { geometry in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(.primary.opacity(0.1))
+                            Capsule().fill(Color(nsColor: .systemOrange)).frame(width: geometry.size.width * fraction)
+                        }
+                    }
+                    .frame(height: 4).accessibilityHidden(true)
+                }
+            }
+            if reset != nil && enabled != false {
+                TimelineView(UsageMinuteSchedule(isActive: isPanelVisible)) { context in
+                    HStack {
+                        if let reset {
+                            Image(systemName: "clock").foregroundStyle(.tertiary)
+                            Text(CompactCountdown.text(until: reset, from: context.date).map { "Reset " + $0 } ?? "Resetting")
+                        }
+                    }
+                    .font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .font(.caption)
+        .padding(.horizontal, 20)
+        .padding(.bottom, 10)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+struct GoogleAISectionView: View {
+    let states: [ProviderState]
+    let displayMode: UsageDisplayMode
+    @State private var isExpanded = false
+    var part: ProviderSectionPart = .all
+    var expandedOverride: Bool? = nil
+    var onToggle: (() -> Void)? = nil
+    private var showsDetails: Bool { expandedOverride ?? isExpanded }
+    private var visibleStates: [ProviderState] { part == .summary ? Array(states.prefix(1)) : part == .details || showsDetails ? states : Array(states.prefix(1)) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if part != .details {
+            HStack(spacing: 9) {
+                Text("G").font(.headline.weight(.semibold)).frame(width: 18, height: 18)
+                ProviderDisclosureTitle(title: "Google AI", isExpanded: Binding(get: { showsDetails }, set: { value in
+                    if let onToggle { onToggle() } else { isExpanded = value }
+                }),
+                    canExpand: states.count > 1 || states.first?.snapshot.map(ProviderDetailsLayout.canExpand) == true)
+                    .layoutPriority(1)
+                Spacer()
+                if let email = GoogleAIGroup.sharedEmail(states) {
+                    AccountEmailLabel(email: email)
+                }
+                if let plan = GoogleAIGroup.sharedPlan(states) {
+                    Text(plan.hasPrefix("Google AI ") ? String(plan.dropFirst("Google AI ".count)) : plan)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(.primary.opacity(0.06), in: Capsule())
+                        .accessibilityLabel("Plan \(plan)")
+                    .fixedSize(horizontal: true, vertical: false)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 10)
+            .padding(.bottom, 5)
+            Text(states.count == 1 && states.first?.provider == .gemini ? "Product usage • Gemini" : "Separate usage limits • Gemini & Antigravity")
+                .font(.caption2).foregroundStyle(.secondary)
+                .padding(.horizontal, 14).padding(.bottom, 8)
+            }
+            ForEach(Array(visibleStates.enumerated()), id: \.element.provider) { index, state in
+                if index > 0 {
+                    Divider()
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 6)
+                }
+                ProviderSectionView(state: state, displayMode: displayMode, embedded: true, expandedOverride: showsDetails,
+                                    part: part == .details && index == 0 ? .details : part == .summary ? .summary : .all)
+            }
+        }
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+struct AccountEmailLabel: View {
+    let email: String
+    var body: some View {
+        Text(email)
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .help(email)
+            .accessibilityLabel("Account \(email)")
+    }
+}
+
+/// One quota-grid row is visible until the user explicitly expands the provider.
+enum ProviderDetailsLayout {
+    static func windows(_ snapshot: ProviderSnapshot, expanded: Bool) -> [QuotaWindow] {
+        let ordered = snapshot.provider == .claude
+            ? snapshot.windows.filter { [.session, .weekly].contains($0.kind) }
+                + snapshot.windows.filter { $0.kind == .fable }
+                + snapshot.windows.filter { ![.session, .weekly, .fable].contains($0.kind) }
+            : snapshot.windows
+        return expanded ? ordered : Array(ordered.prefix(2))
+    }
+    static func canExpand(_ snapshot: ProviderSnapshot) -> Bool {
+        snapshot.windows.count > 2 || !snapshot.consumptionShares.isEmpty || snapshot.hasAdditionalUsageSection ||
+            (snapshot.resets?.availableCount ?? 0) > 0 || !snapshot.usageDetails.isEmpty
+    }
+}
+
+private struct ProviderDisclosureTitle: View {
+    let title: String
+    @Binding var isExpanded: Bool
+    let canExpand: Bool
+    var body: some View {
+        if canExpand {
+            Button { isExpanded.toggle() } label: {
+                HStack(spacing: 5) {
+                    Text(title).font(.headline.weight(.semibold))
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 10)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(isExpanded ? "Collapse \(title) details" : "Expand \(title) details")
+            .accessibilityLabel(title)
+            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+        } else {
+            Text(title).font(.headline.weight(.semibold))
         }
     }
 }

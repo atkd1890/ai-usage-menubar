@@ -6,26 +6,36 @@ struct SettingsView: View {
     @Bindable var preferences: AppPreferences
     @Bindable var launchAtLogin: LaunchAtLoginController
     @Bindable var updateController: UpdateController
+    var isInSettingsWindow = false
     var showDashboard: @MainActor () -> Void = {}
 
     @State private var rowFrames: [ProviderID: CGRect] = [:]
     @State private var draggingProvider: ProviderID?
 
     var body: some View {
-        GlassEffectContainer(spacing: 10) {
+        Group {
             VStack(alignment: .leading, spacing: 16) {
-                header
+                if !isInSettingsWindow { header }
                 providersSection
+                Divider()
+                alertsSection
+                Divider()
                 generalSection
                 footer
             }
         }
         .padding(20)
-        .frame(width: MenuBarPanelRoute.settings.width, alignment: .top)
+        .frame(width: AppSurfaceLayout.settingsWidth, alignment: .top)
         .onAppear {
             store.setTrackedProviders(preferences.trackedProviderIDs)
             store.setRefreshInterval(preferences.refreshInterval)
             launchAtLogin.synchronize()
+        }
+        .onChange(of: preferences.geminiNativeAccessAllowed) { _, _ in
+            store.refreshNow()
+        }
+        .onChange(of: preferences.geminiSource) { _, _ in
+            store.refreshNow()
         }
         .onChange(of: preferences.refreshInterval) { _, interval in
             store.setRefreshInterval(interval)
@@ -37,7 +47,7 @@ struct SettingsView: View {
             Button(action: showDashboard) {
                 Label("Usage", systemImage: "chevron.left")
             }
-            .buttonStyle(.glass)
+            .buttonStyle(.bordered)
             .controlSize(.small)
             .help("Back to usage")
             .accessibilityHint("Shows the usage dashboard")
@@ -60,12 +70,14 @@ struct SettingsView: View {
             providerRows
                 .padding(.horizontal, 12)
                 .padding(.vertical, 4)
-                .glassEffect(.regular, in: .rect(cornerRadius: 14))
+                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+
+
         }
     }
 
     private var providerRows: some View {
-        providerRowsContent(preferences.providerOrder.map(\.descriptor))
+        providerRowsContent(GoogleAIGroup.ordered(preferences.providerOrder.filter(\.isEnabledInBuild)).map(\.descriptor))
     }
 
     private func providerRowsContent(
@@ -77,6 +89,12 @@ struct SettingsView: View {
             Divider()
 
             ForEach(descriptors) { descriptor in
+                if GoogleAIGroup.members.contains(descriptor.id) {
+                    if descriptor.id == descriptors.first(where: { GoogleAIGroup.members.contains($0.id) })?.id {
+                        googleSettingsRow(anchor: descriptor.id)
+                        if descriptor.id != descriptors.last?.id { Divider() }
+                    }
+                } else {
                 let availableItems = store.availableMenuBarItems(
                     for: descriptor.id
                 )
@@ -121,19 +139,55 @@ struct SettingsView: View {
                     dragChanged: { handleDrag(of: descriptor.id, at: $0) },
                     dragEnded: { draggingProvider = nil },
                     move: { offset in
-                        withAnimation(.snappy(duration: 0.2)) {
-                            preferences.moveProvider(descriptor.id, by: offset)
-                        }
+                        preferences.moveProvider(descriptor.id, by: offset)
                     },
-                    rowsSpace: Self.rowsSpace
+                    rowsSpace: Self.rowsSpace,
+                    loginPreferences: preferences, loginChanged: { store.reconnect(providerIDs: [descriptor.id]) }
                 )
 
                 if descriptor.id != descriptors.last?.id {
                     Divider()
                 }
+                }
             }
         }
         .coordinateSpace(.named(Self.rowsSpace))
+    }
+
+    private func googleSettingsRow(anchor: ProviderID) -> some View {
+        let method = preferences.loginMethod(for: .gemini)
+        let members: [ProviderID] = [.edge, .chrome].contains(method) ? [.gemini] : [.gemini, .antigravity]
+        let items = members.flatMap { store.states[$0]?.snapshot?.availableMenuBarItems ?? [] }
+        let selected = Set(items.filter { preferences.isMenuBarMetricSelected($0) })
+        let tracking = members.contains { preferences.isTracking($0) }
+        let visible = members.contains { preferences.isProviderShownInMenuBar($0) }
+        return ProviderSettingsRow(
+            descriptor: ProviderDescriptor(id: anchor, displayName: "Google AI", iconAssetName: "ProviderGemini",
+                executableNames: [], installationIndicators: [], defaultMenuBarMetric: .weekly),
+            state: store.states[.gemini], isTracking: tracking, isVisible: visible,
+            selectedMetrics: [], availableItems: items,
+            setTracking: { enabled in
+                if enabled { preferences.setLoginMethod(preferences.loginMethod(for: .gemini), for: .gemini) }
+                preferences.setGoogleAITracking(enabled)
+                store.setTrackedProviders(preferences.trackedProviderIDs)
+            },
+            setVisible: { enabled in
+                preferences.setGoogleAIMenuBarVisibility(enabled, availableItems: items)
+            },
+            setMetric: { item, enabled in
+                preferences.setMenuBarMetric(enabled, item: item,
+                    availableItems: items.filter { $0.provider == item.provider })
+            },
+            isDragging: draggingProvider == anchor,
+            reportFrame: { rowFrames[anchor] = $0 },
+            dragChanged: { handleDrag(of: anchor, at: $0) },
+            dragEnded: { draggingProvider = nil },
+            move: { offset in preferences.moveProvider(anchor, by: offset) },
+            rowsSpace: Self.rowsSpace,
+            displayNameOverride: "Google AI", selectedMetricItems: selected,
+            loginPreferences: preferences, loginChanged: { store.reconnect(providerIDs: GoogleAIGroup.members) },
+            connectionStates: members.compactMap { store.states[$0] }
+        )
     }
 
     private static let rowsSpace = "providerRows"
@@ -148,36 +202,26 @@ struct SettingsView: View {
             order: preferences.providerOrder,
             frames: rowFrames
         ) else { return }
-        withAnimation(.snappy(duration: 0.2)) {
-            preferences.moveProvider(provider, to: target)
+        preferences.moveProvider(provider, to: target)
+    }
+
+    private var alertsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionHeader(title: "Alerts", systemImage: "bell", detail: "System notifications · follows macOS Focus.")
+            AlertSettingsView(settings: preferences.alerts, enable: { store.alertController?.requestPermission() })
+                .padding(.leading, 12)
         }
     }
 
     private var generalSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("General")
-                .font(.headline)
+            sectionHeader(title: "General", systemImage: "gearshape", detail: "Refresh and startup preferences.")
 
             Grid(
                 alignment: .leading,
                 horizontalSpacing: 18,
                 verticalSpacing: 11
             ) {
-                GridRow {
-                    Text("Numbers")
-                        .foregroundStyle(.secondary)
-
-                    Picker("Numbers", selection: $preferences.usageDisplayMode) {
-                        ForEach(UsageDisplayMode.allCases) { mode in
-                            Text(mode.title)
-                                .tag(mode)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 130)
-                }
-
                 GridRow {
                     Text("Refresh")
                         .foregroundStyle(.secondary)
@@ -225,18 +269,6 @@ struct SettingsView: View {
 
     private var footer: some View {
         HStack(spacing: 12) {
-            Button("Check for Updates…") {
-                updateController.checkForUpdates()
-            }
-            .disabled(updateController.isChecking)
-
-            if updateController.isChecking {
-                ProgressView()
-                    .controlSize(.small)
-            }
-
-            Link("Star on GitHub", destination: AppLinks.repository)
-
             Spacer()
 
             Button("Quit AI Usage") {
@@ -268,6 +300,8 @@ private struct ProviderSettingsHeader: View {
         HStack(spacing: 10) {
             Text("Provider")
                 .frame(width: 130, alignment: .leading)
+            Text("Login method")
+                .frame(width: 180, alignment: .leading)
             Text("Track")
                 .frame(width: 44)
             Label("Menu Bar", systemImage: "menubar.rectangle")
@@ -297,17 +331,46 @@ private struct ProviderSettingsRow: View {
     let move: (Int) -> Void
     let rowsSpace: String
 
+    var displayNameOverride: String? = nil
+    var selectedMetricItems: Set<MenuBarItemID>? = nil
+
+    var loginPreferences: AppPreferences? = nil
+    var loginChanged: () -> Void = {}
+    var connectionStates: [ProviderState]? = nil
+    @State private var loginRevision = 0
+
+    private var displayName: String { displayNameOverride ?? state?.snapshot?.displayName ?? descriptor.displayName }
+    private func isSelected(_ item: MenuBarItemID) -> Bool {
+        selectedMetricItems?.contains(item) ?? selectedMetrics.contains(item.metric)
+    }
+    private func metricTitle(_ item: MenuBarItemID) -> String {
+        selectedMetricItems == nil ? item.metric.title : item.provider.displayName + " · " + item.metric.title
+    }
+
+    private var connectionStatus: some View {
+        let states = connectionStates ?? [state].compactMap { $0 }
+        let status = states.first(where: { $0.isRefreshing })
+            ?? states.first(where: { $0.failure != nil || $0.snapshot == nil })
+            ?? states.first
+        return ProviderStatusView(state: status)
+            .help(status?.failure?.message ?? "Usage loaded successfully using the selected login method.")
+    }
+
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
             HStack(spacing: 8) {
-                ProviderIcon(provider: descriptor.id, size: 22)
+                if state?.snapshot?.xSubscription != nil {
+                    Text("𝕏").font(.title2).frame(width: 22, height: 22)
+                } else {
+                    ProviderIcon(provider: descriptor.id, size: 22)
+                }
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(descriptor.displayName)
+                    Text(displayName)
                         .font(.body.weight(.medium))
 
                     if isTracking {
-                        ProviderStatusView(state: state)
+                        connectionStatus
                     } else {
                         Label("Off", systemImage: "pause.circle")
                             .font(.caption)
@@ -317,8 +380,44 @@ private struct ProviderSettingsRow: View {
             }
             .frame(width: 130, alignment: .leading)
 
+            if let preferences = loginPreferences {
+                VStack(alignment: .leading, spacing: 4) {
+                    Picker("Login method for \(displayName)", selection: Binding(
+                        get: { _ = loginRevision; return preferences.loginMethod(for: descriptor.id) },
+                        set: { method in
+                            preferences.setLoginMethod(method, for: descriptor.id)
+                            loginRevision += 1
+                            loginChanged()
+                        }
+                    )) {
+                        ForEach(ProviderLoginMethod.supported(for: descriptor.id)) { method in
+                            Text(method.title(for: descriptor.id)).tag(method)
+                        }
+                    }
+                    .labelsHidden()
+                    .controlSize(.small)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(width: 180, alignment: .leading)
+                    .help("Uses the selected credential source immediately and reports the quota fetch result beneath the provider name.")
+                    if descriptor.id == .manus, state?.failure?.kind == .storage {
+                        Button("Allow Edge access…") {
+                            if BrowserDatabaseAccess.request() { loginChanged() }
+                        }
+                        .controlSize(.small)
+                        .help("Choose only Edge Default's Cookies file using the macOS permission dialog.")
+                    }
+                    if let account = state?.snapshot?.identityEmail {
+                        Text(account).font(.caption2).foregroundStyle(.secondary)
+                            .lineLimit(1).truncationMode(.middle).help(account)
+                    }
+
+                }
+                .font(.caption)
+                .frame(width: 180, alignment: .leading)
+            }
+
             Toggle(
-                "Track \(descriptor.displayName)",
+                "Track \(displayName)",
                 isOn: Binding(
                     get: { isTracking },
                     set: { enabled in setTracking(enabled) }
@@ -328,11 +427,11 @@ private struct ProviderSettingsRow: View {
             .toggleStyle(.switch)
             .controlSize(.small)
             .frame(width: 44)
-            .accessibilityLabel("Track \(descriptor.displayName)")
+            .accessibilityLabel("Track \(displayName)")
 
             HStack(spacing: 8) {
                 Toggle(
-                    "Show \(descriptor.displayName) in Menu Bar",
+                    "Show \(displayName) in Menu Bar",
                     isOn: Binding(
                         get: { isVisible },
                         set: { enabled in setVisible(enabled) }
@@ -345,8 +444,8 @@ private struct ProviderSettingsRow: View {
                 .disabled(!isTracking || (!isVisible && !canEnableMenuBar))
                 .help(
                     isVisible
-                        ? "Hide \(descriptor.displayName) from the menu bar"
-                        : "Show \(descriptor.displayName) in the menu bar"
+                        ? "Hide \(displayName) from the menu bar"
+                        : "Show \(displayName) in the menu bar"
                 )
 
                 Divider()
@@ -386,8 +485,8 @@ private struct ProviderSettingsRow: View {
                 .onEnded { _ in dragEnded() }
             )
             .pointerStyle(isDragging ? .grabActive : .grabIdle)
-            .help("Drag to reorder \(descriptor.displayName)")
-            .accessibilityLabel("Reorder \(descriptor.displayName)")
+            .help("Drag to reorder \(displayName)")
+            .accessibilityLabel("Reorder \(displayName)")
             .accessibilityAction(named: "Move Up") { move(-1) }
             .accessibilityAction(named: "Move Down") { move(1) }
     }
@@ -402,10 +501,10 @@ private struct ProviderSettingsRow: View {
             WrappingHStack(spacing: 8, lineSpacing: 4) {
                 ForEach(availableItems) { item in
                     Toggle(
-                        item.metric.title,
+                        metricTitle(item),
                         isOn: Binding(
                             get: {
-                                selectedMetrics.contains(item.metric)
+                                isSelected(item)
                             },
                             set: { enabled in
                                 setMetric(item, enabled)
@@ -420,7 +519,7 @@ private struct ProviderSettingsRow: View {
                         enabledMetricHelp(
                             item.metric,
                             isSelected:
-                                selectedMetrics.contains(item.metric)
+                                isSelected(item)
                         )
                     )
                 }
@@ -430,7 +529,7 @@ private struct ProviderSettingsRow: View {
 
     private var canEnableMenuBar: Bool {
         state?.isToolInstalled != false &&
-            (!selectedMetrics.isEmpty || !availableItems.isEmpty)
+            (!(selectedMetricItems?.isEmpty ?? selectedMetrics.isEmpty) || !availableItems.isEmpty)
     }
 
     private var emptyMetricsMessage: String {
@@ -440,9 +539,7 @@ private struct ProviderSettingsRow: View {
         if state?.isRefreshing == true {
             return "Loading available metrics…"
         }
-        if state?.failure?.kind == .authentication {
-            return "Log in to choose metrics"
-        }
+        if let failure = state?.failure { return failure.message }
         return "No usage metrics returned"
     }
 
@@ -451,8 +548,8 @@ private struct ProviderSettingsRow: View {
         isSelected: Bool
     ) -> String {
         isSelected
-            ? "Hide \(metric.title) for \(descriptor.displayName)"
-            : "Show \(metric.title) for \(descriptor.displayName)"
+            ? "Hide \(metric.title) for \(displayName)"
+            : "Show \(metric.title) for \(displayName)"
     }
 }
 
@@ -574,6 +671,13 @@ private struct ProviderStatusPresentation {
             return
         }
 
+        if state.isRefreshing {
+            text = "Connecting…"
+            systemImage = "arrow.triangle.2.circlepath"
+            color = .secondary
+            return
+        }
+
         if state.isToolInstalled == false {
             text = "Not installed"
             systemImage = "minus.circle"
@@ -609,6 +713,41 @@ private struct ProviderStatusPresentation {
             text = state.isRefreshing ? "Checking…" : "Waiting for usage"
             systemImage = "clock"
             color = .secondary
+        }
+    }
+}
+
+private struct AlertSettingsView: View {
+    @Bindable var settings: AlertPreferences
+    let enable: () -> Void
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            row("An agent will run out before it resets", subtitle: "Based on your pace, not fixed 80% / 90% marks", binding: $settings.runningOut)
+            row("Extra balance starts being used", subtitle: "A limit was hit and paid usage kicked in", binding: $settings.paidUsage)
+            row("A capped limit is back", subtitle: "A previously capped limit is available again", binding: $settings.limitBack)
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Heads-up lead time")
+                    Text("How early to warn before your quota is predicted to run out")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Picker("Heads-up lead time", selection: $settings.leadMinutes) {
+                    ForEach([5, 15, 30, 60], id: \.self) { Text("\($0) minutes").tag($0) }
+                }.labelsHidden().frame(width: 140)
+            }
+        }
+        .toggleStyle(.switch).controlSize(.small)
+        .onChange(of: settings.enabled) { _, enabled in if enabled { enable() } }
+    }
+    private func row(_ title: String, subtitle: String?, binding: Binding<Bool>) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                if let subtitle { Text(subtitle).font(.caption).foregroundStyle(.secondary) }
+            }
+            Spacer()
+            Toggle(title, isOn: binding).labelsHidden()
         }
     }
 }

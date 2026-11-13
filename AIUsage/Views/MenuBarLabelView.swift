@@ -6,7 +6,8 @@ struct MenuBarPresentation: Equatable, Sendable {
     let showsStaleIndicator: Bool
 
     init(reading: MenuBarReading) {
-        let provider = reading.provider.displayName
+        let provider = reading.isXSubscription ? "X Subscription"
+            : (GoogleAIGroup.members.contains(reading.provider) ? "Google AI · " + reading.provider.displayName : reading.provider.displayName)
         let subject = "\(provider) \(reading.metric.title)"
         switch reading.value {
         case .percentage(let percent):
@@ -75,7 +76,7 @@ struct MenuBarReadingsPresentation: Equatable, Sendable {
         }
         accessibilityLabel = groups.map { group in
             if group.readings.isEmpty {
-                return "\(group.provider.displayName), no usage data"
+                return "\(group.isXSubscription ? "X Subscription" : group.provider.displayName), no usage data"
             }
             return group.readings
                 .map(MenuBarPresentation.init(reading:))
@@ -89,6 +90,14 @@ struct MenuBarMetricPresentation: Equatable, Sendable {
     let label: String?
     let valueText: String
     let showsStaleIndicator: Bool
+    let severity: UsageSeverity
+
+    init(label: String?, valueText: String, showsStaleIndicator: Bool, severity: UsageSeverity = .normal) {
+        self.label = label
+        self.valueText = valueText
+        self.showsStaleIndicator = showsStaleIndicator
+        self.severity = severity
+    }
 }
 
 struct MenuBarProviderPresentation: Equatable, Sendable {
@@ -126,8 +135,11 @@ struct MenuBarProviderPresentation: Equatable, Sendable {
             return MenuBarMetricPresentation(
                 label: needsLabel ? reading.metric.compactLabel : nil,
                 valueText: valueText,
-                showsStaleIndicator:
-                    presentation.showsStaleIndicator
+                showsStaleIndicator: presentation.showsStaleIndicator,
+                severity: {
+                    guard case let .percentage(percent) = reading.value else { return .normal }
+                    return UsageSeverity(usedPercent: reading.displayMode == .used ? percent : 100 - percent)
+                }()
             )
         }
         sharedSuffix = sharesPercentageSuffix ? "%" : nil
@@ -170,10 +182,12 @@ struct MenuBarProviderLabelView: View {
 
                     Text(metric.valueText)
                         .monospacedDigit()
+                        .foregroundStyle(metric.severity.color)
 
                     if index == presentation.metrics.count - 1,
                        let suffix = presentation.sharedSuffix {
                         Text(suffix)
+                            .foregroundStyle(metric.severity.color)
                             .font(.system(
                                 size: microFontSize,
                                 weight: .semibold

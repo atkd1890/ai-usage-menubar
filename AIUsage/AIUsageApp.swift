@@ -56,6 +56,11 @@ final class AIUsageAppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        menuBarController?.reopenMainWindow()
+        return false
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         menuBarController?.stop()
         menuBarController = nil
@@ -90,6 +95,13 @@ final class AIUsageAppDelegate: NSObject, NSApplicationDelegate {
         appMenuItem.submenu = appMenu
         mainMenu.addItem(appMenuItem)
 
+        let windowMenuItem = NSMenuItem()
+        let windowMenu = NSMenu(title: "Window")
+        windowMenu.addItem(NSMenuItem(title: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w"))
+        windowMenu.addItem(NSMenuItem(title: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m"))
+        windowMenuItem.submenu = windowMenu
+        mainMenu.addItem(windowMenuItem)
+        NSApplication.shared.windowsMenu = windowMenu
         NSApplication.shared.mainMenu = mainMenu
     }
 

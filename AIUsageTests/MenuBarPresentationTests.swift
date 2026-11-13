@@ -66,7 +66,7 @@ final class MenuBarPresentationTests: XCTestCase {
         XCTAssertEqual(presentation.items.map(\.valueText), ["62%", "28%"])
         XCTAssertEqual(
             presentation.accessibilityLabel,
-            "Claude Code Session 62 percent used, Codex Spark Weekly 28 percent used, stale"
+            "Claude Session 62 percent used, Codex Spark Weekly 28 percent used, stale"
         )
     }
 
@@ -218,7 +218,7 @@ final class MenuBarPresentationTests: XCTestCase {
         XCTAssertEqual(presentation.items, [])
         XCTAssertEqual(
             presentation.accessibilityLabel,
-            "Claude Code, no usage data"
+            "Claude, no usage data"
         )
         XCTAssertEqual(
             MenuBarProviderPresentation(group: groups[0]).metrics,
@@ -262,7 +262,7 @@ final class MenuBarPresentationTests: XCTestCase {
             font: NSFont.menuBarFont(ofSize: 0)
         )
 
-        XCTAssertTrue(image.isTemplate)
+        XCTAssertFalse(image.isTemplate)
         XCTAssertGreaterThan(image.size.width, 55)
         XCTAssertLessThan(image.size.width, 130)
     }

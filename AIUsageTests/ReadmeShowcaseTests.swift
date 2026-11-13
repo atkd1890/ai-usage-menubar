@@ -89,7 +89,7 @@ private final class ShowcaseStudio {
                 availableUpdateVersion: nil,
                 isCheckingForUpdates: false
             ),
-            width: MenuBarPanelRoute.dashboard.width
+            width: AppSurfaceLayout.dashboardWidth
         )
         let size = CGSize(
             width: Self.sceneWidth,
@@ -129,7 +129,7 @@ private final class ShowcaseStudio {
                 ),
                 updateController: UpdateController(startingUpdater: false)
             ),
-            width: MenuBarPanelRoute.settings.width
+            width: AppSurfaceLayout.settingsWidth
         )
         let size = CGSize(
             width: Self.sceneWidth,
@@ -225,7 +225,7 @@ private final class ShowcaseStudio {
                 availableUpdateVersion: nil,
                 isCheckingForUpdates: false
             ),
-            width: MenuBarPanelRoute.dashboard.width
+            width: AppSurfaceLayout.dashboardWidth
         )
         let scene = DesktopScene(
             look: look,

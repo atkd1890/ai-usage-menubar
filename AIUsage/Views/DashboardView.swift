@@ -1,8 +1,11 @@
 import AppKit
 import SwiftUI
 
+enum DashboardSection { case header, rows, footer }
+
 struct DashboardView: View {
     @Bindable var store: UsageStore
+    @Environment(\.usagePanelVisible) private var isPanelVisible
     @Bindable var launchAtLogin: LaunchAtLoginController
     @Binding var usageDisplayMode: UsageDisplayMode
     @Binding var refreshInterval: RefreshIntervalOption
@@ -10,21 +13,35 @@ struct DashboardView: View {
     let isCheckingForUpdates: Bool
     var checkForUpdates: @MainActor () -> Void = {}
     var openSettings: @MainActor () -> Void = {}
+    var openAnalytics: @MainActor () -> Void = {}
     var providerOrder: [ProviderID] = ProviderID.allCases
 
+    var section: DashboardSection? = nil
+
     var body: some View {
-        // Keep the container on the footer only. One spanning the scroll view
-        // lets the provider cards' glass escape the scroll clip and draw over
-        // the header and footer.
+        Group {
+            switch section {
+            case .header: content.header.padding([.horizontal, .top], 10).padding(.bottom, 8)
+            case .rows: content.providerRowsContent.padding(.horizontal, 10).padding(.bottom, 6)
+            case .footer: footer
+            case nil: completeDashboard
+            }
+        }
+        .frame(width: 392)
+    }
+
+    private var content: DashboardContentView {
+        DashboardContentView(store: store, usageDisplayMode: $usageDisplayMode, providerOrder: providerOrder)
+    }
+
+    private var completeDashboard: some View {
         DashboardContentView(
             store: store,
             usageDisplayMode: $usageDisplayMode,
             providerOrder: providerOrder
         )
         .safeAreaBar(edge: .bottom, spacing: 0) {
-            GlassEffectContainer(spacing: 10) {
-                footer
-            }
+            footer
         }
         .frame(width: 392)
         .onAppear {
@@ -48,7 +65,7 @@ struct DashboardView: View {
                     if let updated = store.lastSuccessfulRefreshAt {
                         HStack(spacing: 3) {
                             Text("Updated")
-                            Text(updated, style: .relative)
+                            if isPanelVisible { Text(updated, style: .relative) }
                         }
                     } else if store.lastAttemptAt != nil {
                         Text("Not updated")
@@ -68,7 +85,7 @@ struct DashboardView: View {
                     Label("Update", systemImage: "arrow.down.circle.fill")
                         .foregroundStyle(.white)
                 }
-                .buttonStyle(.glassProminent)
+                .buttonStyle(.borderedProminent)
                 .tint(UsagePalette.accent)
                 .controlSize(.small)
                 .disabled(isCheckingForUpdates)
@@ -79,26 +96,34 @@ struct DashboardView: View {
                 Button {
                     store.refreshNow()
                 } label: {
-                    RefreshButtonLabel(isRefreshing: isRefreshing)
+                    RefreshButtonLabel(isRefreshing: isRefreshing && isPanelVisible)
                 }
                 .help(isRefreshing ? "Refreshing usage" : "Refresh now")
                 .disabled(isRefreshing)
+
+                Button(action: openAnalytics) {
+                    Image(systemName: "chart.bar.xaxis")
+                        .font(.system(size: RefreshButtonLabel.symbolSize, weight: .medium))
+                        .frame(width: RefreshButtonLabel.size, height: RefreshButtonLabel.size)
+                }
+                .help("Dashboard")
+                .accessibilityLabel("Open Dashboard")
 
                 Button(action: openSettings) {
                     SettingsButtonLabel()
                 }
                 .help("Settings")
                 .accessibilityLabel("Settings")
-                .accessibilityHint("Shows settings in the menu bar panel")
+                .accessibilityHint("Opens the Settings window")
             }
             .buttonStyle(.plain)
-            .glassEffect(.regular, in: .capsule)
+            .background(Color(nsColor: .controlBackgroundColor), in: Capsule())
         }
         .padding(.leading, 12)
         .padding(.trailing, 8)
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity)
-        .glassEffect(.regular, in: .rect(cornerRadius: 16))
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
         .padding(.horizontal, 10)
         .padding(.top, 4)
         .padding(.bottom, 7)
@@ -162,23 +187,25 @@ struct DashboardContentView: View {
         .padding(.bottom, 6)
     }
 
-    @ViewBuilder
     private var providerRows: some View {
-        if visibleProviders.count > 2 {
-            ScrollView {
-                providerRowsContent
-            }
-            .frame(maxHeight: 390)
-            .scrollIndicators(.hidden)
-        } else {
-            providerRowsContent
-        }
+        ScrollView { providerRowsContent }
+            .scrollBounceBehavior(.basedOnSize)
     }
 
-    private var providerRowsContent: some View {
-        LazyVStack(spacing: 8) {
-            ForEach(visibleProviders) { provider in
-                if let state = store.states[provider] {
+    var providerRowsContent: some View {
+        VStack(spacing: 8) {
+            ForEach(topLevelProviders) { provider in
+                if provider != topLevelProviders.first {
+                    Rectangle()
+                        .fill(.primary.opacity(0.22))
+                        .frame(height: 1)
+                        .padding(.vertical, 4)
+                        .accessibilityHidden(true)
+                }
+                if GoogleAIGroup.members.contains(provider) {
+                        GoogleAISectionView(states: googleProviders.compactMap { store.states[$0] },
+                                            displayMode: usageDisplayMode)
+                } else if let state = store.states[provider] {
                     ProviderSectionView(
                         state: state,
                         displayMode: usageDisplayMode
@@ -188,11 +215,22 @@ struct DashboardContentView: View {
         }
     }
 
-    private var visibleProviders: [ProviderID] {
-        providerOrder.filter(store.isProviderVisibleInDashboard)
+    // Google AI is one top-level provider group; its child divider remains inset.
+    private var topLevelProviders: [ProviderID] {
+        visibleProviders.filter {
+            !GoogleAIGroup.members.contains($0) || $0 == googleProviders.first
+        }
     }
 
-    private var header: some View {
+    private var visibleProviders: [ProviderID] {
+        GoogleAIGroup.ordered(providerOrder.filter(store.isProviderVisibleInDashboard))
+    }
+
+    private var googleProviders: [ProviderID] {
+        visibleProviders.filter { GoogleAIGroup.members.contains($0) }
+    }
+
+    var header: some View {
         HStack {
             Text("AI Usage")
                 .font(.headline.weight(.semibold))

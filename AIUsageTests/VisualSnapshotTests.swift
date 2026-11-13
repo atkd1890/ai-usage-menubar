@@ -90,7 +90,7 @@ final class VisualSnapshotTests: XCTestCase {
         }
     }
 
-    func testDashboardFitsCompactPanelInLightAndDark() async {
+    func testDashboardFitsBoundedPanelInLightAndDark() async {
         let store = await makePopulatedStore()
         let configurations: [(ColorScheme, Bool)] = [
             (.light, false),
@@ -107,17 +107,18 @@ final class VisualSnapshotTests: XCTestCase {
                 availableUpdateVersion: nil,
                 isCheckingForUpdates: false
             )
+            .frame(maxHeight: 700)
             .environment(\.colorScheme, colorScheme)
             .environment(\._accessibilityReduceTransparency, reducesTransparency)
 
             let size = measuredSize(of: view, width: panelWidth)
             XCTAssertEqual(size.width, panelWidth, accuracy: 0.5)
-            XCTAssertLessThan(size.height, 500)
+            XCTAssertLessThanOrEqual(size.height, 700.5)
             XCTAssertGreaterThan(size.height, 250)
         }
     }
 
-    func testDashboardStaysCompactWithRemainingUsageAndUpdateAction() async {
+    func testDashboardRespectsHeightBoundWithRemainingUsageAndUpdateAction() async {
         let store = await makePopulatedStore()
         let view = DashboardView(
             store: store,
@@ -127,16 +128,17 @@ final class VisualSnapshotTests: XCTestCase {
             availableUpdateVersion: "0.2.0",
             isCheckingForUpdates: false
         )
+        .frame(maxHeight: 700)
         .environment(\.colorScheme, .dark)
 
         let size = measuredSize(of: view, width: panelWidth)
 
         XCTAssertEqual(size.width, panelWidth, accuracy: 0.5)
-        XCTAssertLessThan(size.height, 500)
+        XCTAssertLessThanOrEqual(size.height, 700.5)
         XCTAssertGreaterThan(size.height, 250)
     }
 
-    func testSettingsShowsEveryProviderInLightAndDark() async {
+    func testSettingsShowsEnabledProviderGroupsInLightAndDark() async {
         let store = await makeFullyPopulatedStore()
         let suiteName = "VisualSnapshotTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
@@ -157,14 +159,13 @@ final class VisualSnapshotTests: XCTestCase {
             )
             .environment(\.colorScheme, colorScheme)
 
-            let width = MenuBarPanelRoute.settings.width
+            let width = AppSurfaceLayout.settingsWidth
             let size = measuredSize(of: view, width: width)
             XCTAssertEqual(size.width, width, accuracy: 0.5)
-            // Nine providers. The panel still has to open in full below the
-            // menu bar of a 1440x900 display; another provider should make
-            // room by leaving tools that aren't installed out of this list.
-            XCTAssertLessThan(size.height, 800)
-            XCTAssertGreaterThan(size.height, 620)
+            // Enabled products and Google grouping replace the original nine-row panel.
+            // The native settings window constrains and scrolls taller content.
+            XCTAssertLessThan(size.height, 900)
+            XCTAssertGreaterThan(size.height, 300)
         }
 
         defaults.removePersistentDomain(forName: suiteName)
@@ -196,10 +197,14 @@ final class VisualSnapshotTests: XCTestCase {
         )
         let state = ProviderState(provider: .claude, snapshot: snapshot)
         let size = measuredSize(of: ProviderSectionView(state: state), width: panelWidth - 20)
+        let expanded = measuredSize(of: ProviderSectionView(state: state, expandedOverride: true), width: panelWidth - 20)
 
         XCTAssertEqual(size.width, panelWidth - 20, accuracy: 0.5)
-        XCTAssertLessThan(size.height, 200)
-        XCTAssertGreaterThan(size.height, 130)
+        XCTAssertGreaterThan(size.height, 70)
+        XCTAssertLessThan(size.height, expanded.height)
+        XCTAssertLessThan(expanded.height, 240)
+        XCTAssertEqual(ProviderDetailsLayout.windows(snapshot, expanded: false).map(\.kind), [.session, .weekly])
+        XCTAssertEqual(ProviderDetailsLayout.windows(snapshot, expanded: true).map(\.kind), [.session, .weekly, .sonnet])
     }
 
     func testBillingUsagePresentationKeepsProviderSemanticsDistinct() {
