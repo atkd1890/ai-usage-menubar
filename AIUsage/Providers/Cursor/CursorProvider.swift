@@ -16,19 +16,23 @@ actor CursorProvider: UsageProvider {
     private let authStore: CursorAuthStore
     private let client: CursorUsageClient
     private let dateProvider: DateProviding
+    private let identity: AccountIdentityClient?
+    private let identityCache = AccountIdentityCache(provider: .cursor, source: "desktop")
 
     init(
         authStore: CursorAuthStore = CursorAuthStore(),
         client: CursorUsageClient = CursorUsageClient(),
-        dateProvider: DateProviding = SystemDateProvider()
+        dateProvider: DateProviding = SystemDateProvider(),
+        identity: AccountIdentityClient? = nil
     ) {
         self.authStore = authStore
         self.client = client
         self.dateProvider = dateProvider
+        self.identity = identity
     }
 
     func fetch() async throws -> ProviderSnapshot {
-        guard var auth = authStore.load() else {
+        guard var auth = try authStore.load() else {
             throw ProviderFailure(
                 .authentication,
                 "Not logged in. Sign in through Cursor."
@@ -73,11 +77,31 @@ actor CursorProvider: UsageProvider {
             )
         }
         let plan = try? await client.fetchPlan(accessToken: token)
-        return try CursorUsageMapper.map(
+        let legacy = try CursorUsageMapper.map(
             usageResponse: usage,
             planResponse: plan,
             now: dateProvider.now()
         )
+        var email = AccountEmail.jwt(token)
+        if email == nil, let identity, let cookie = try? CursorUsageClient.sessionCookie(accessToken: token) {
+            email = await identityCache.read(credential: auth.refreshToken ?? token) { try await identity.cursor(cookie) }
+        }
+        let merged = plan.flatMap { try? ProviderParsing.object(from: $0.body) }?["isMerged"] as? Bool == true
+        let weekly = legacyPlanIsWeekly(plan)
+        guard merged || weekly else { return legacy.withCredential(source: "Cursor desktop", account: email, email: email) }
+        let dashboardToken = token
+        let sharedToken = token
+        async let dashboard = try? client.fetchDashboard(accessToken: dashboardToken, path: "/api/dashboard/v2/usage-status?scope=user")
+        async let shared = try? client.fetchDashboard(accessToken: sharedToken, path: "/api/dashboard/get-sand-usage-status", post: true)
+        let snapshot = try await CursorUnifiedUsageMapper.map(legacy: legacy, dashboard: dashboard, shared: shared,
+                                                     isMerged: merged, now: dateProvider.now())
+        return snapshot.withCredential(source: "Cursor desktop", account: email, email: email)
+    }
+
+    private func legacyPlanIsWeekly(_ response: HTTPResponse?) -> Bool {
+        guard let response, let body = try? ProviderParsing.object(from: response.body),
+              let info = ProviderParsing.object(body["planInfo"]) else { return false }
+        return ProviderParsing.string(info["includedUsagePeriod"]) == "INCLUDED_USAGE_PERIOD_WEEKLY"
     }
 
     private func requestUsage(_ token: String) async throws -> HTTPResponse {

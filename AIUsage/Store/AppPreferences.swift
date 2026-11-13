@@ -60,6 +60,38 @@ final class AppPreferences {
         }
     }
 
+    var geminiSource: GeminiCredentialSource {
+        didSet { defaults.set(geminiSource.rawValue, forKey: GeminiCredentialSource.preferenceKey) }
+    }
+    var geminiNativeAccessAllowed: Bool {
+        didSet { defaults.set(geminiNativeAccessAllowed, forKey: GeminiNativeAuthStore.accessKey) }
+    }
+    var geminiEdgeCookiesAllowed: Bool {
+        didSet { defaults.set(geminiEdgeCookiesAllowed, forKey: GeminiCredentialSource.edge.accessKey) }
+    }
+    var geminiCredentialAccessAllowed: Bool {
+        get {
+            switch geminiSource {
+            case .nativeApp: geminiNativeAccessAllowed
+            case .edge: geminiEdgeCookiesAllowed
+            case .chrome: geminiChromeCookiesAllowed
+            }
+        }
+        set {
+            switch geminiSource {
+            case .nativeApp: geminiNativeAccessAllowed = newValue
+            case .edge: geminiEdgeCookiesAllowed = newValue
+            case .chrome: geminiChromeCookiesAllowed = newValue
+            }
+        }
+    }
+
+    var geminiChromeCookiesAllowed: Bool {
+        didSet { defaults.set(geminiChromeCookiesAllowed, forKey: GeminiAuthStore.cookieAccessKey) }
+    }
+
+    let alerts: AlertPreferences
+
     var usageDisplayMode: UsageDisplayMode {
         didSet {
             defaults.set(usageDisplayMode.rawValue, forKey: Key.usageDisplayMode)
@@ -79,6 +111,11 @@ final class AppPreferences {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        alerts = AlertPreferences(defaults: defaults)
+        geminiSource = defaults.string(forKey: GeminiCredentialSource.preferenceKey).flatMap(GeminiCredentialSource.init(rawValue:)) ?? .nativeApp
+        geminiNativeAccessAllowed = defaults.bool(forKey: GeminiNativeAuthStore.accessKey)
+        geminiEdgeCookiesAllowed = defaults.bool(forKey: GeminiCredentialSource.edge.accessKey)
+        geminiChromeCookiesAllowed = defaults.bool(forKey: GeminiAuthStore.cookieAccessKey)
 
         providerOrder = Self.normalizedOrder(
             Self.decode(
@@ -110,9 +147,16 @@ final class AppPreferences {
                 (canRestore && !restored.contains(.zai)) {
                 initialTrackedProviders.insert(.zai)
             }
+            if defaults.object(forKey: Key.geminiProviderAdded) == nil {
+                initialTrackedProviders.insert(.gemini)
+            }
             if defaults.object(forKey: Key.kiroProviderAdded) == nil {
                 initialTrackedProviders.insert(.kiro)
             }
+        }
+        if defaults.object(forKey: "consumerProvidersAdded.v1") == nil {
+            initialTrackedProviders.formUnion([.manus, .kimi])
+            defaults.set(true, forKey: "consumerProvidersAdded.v1")
         }
         trackedProviderIDs = initialTrackedProviders
         // Property observers do not run in an initializer.
@@ -123,6 +167,7 @@ final class AppPreferences {
         defaults.set(true, forKey: Key.seededProvidersRestored)
         defaults.set(true, forKey: Key.zaiProviderAdded)
         defaults.set(true, forKey: Key.kiroProviderAdded)
+        defaults.set(true, forKey: Key.geminiProviderAdded)
 
         let storedVisibleProviders = Self.decode(
             [ProviderID].self,
@@ -249,6 +294,16 @@ final class AppPreferences {
         var seen: Set<ProviderID> = []
         let kept = stored.filter { seen.insert($0).inserted }
         return kept + ProviderID.allCases.filter { !seen.contains($0) }
+    }
+
+    func setGoogleAITracking(_ enabled: Bool) {
+        for provider in [ProviderID.gemini, .antigravity] { setTracking(enabled, for: provider) }
+    }
+
+    func setGoogleAIMenuBarVisibility(_ enabled: Bool, availableItems: [MenuBarItemID]) {
+        for provider in [ProviderID.gemini, .antigravity] {
+            setMenuBarVisibility(enabled, for: provider, availableItems: availableItems.filter { $0.provider == provider })
+        }
     }
 
     func isTracking(_ provider: ProviderID) -> Bool {
@@ -537,10 +592,98 @@ final class AppPreferences {
             "openUsageProvidersAdded.v1"
         static let zaiProviderAdded = "zaiProviderAdded.v1"
         static let kiroProviderAdded = "kiroProviderAdded.v1"
+        static let geminiProviderAdded = "geminiProviderAdded.v1"
         static let seededProvidersRestored = "seededProvidersRestored.v1"
         static let menuBarSelection = "menuBarSelection"
         static let menuBarWindow = "menuBarWindow"
         static let usageDisplayMode = "usageDisplayMode"
         static let refreshInterval = "refreshInterval"
+    }
+}
+
+// Expose only credential paths actually implemented by each adapter.
+enum ProviderLoginMethod: String, CaseIterable, Identifiable, Sendable {
+    case desktop, cli, edge, chrome, editorFallback, editor
+    var id: Self { self }
+    var title: String {
+        switch self {
+        case .desktop: "Desktop app"
+        case .cli: "Terminal CLI"
+        case .edge: "Browser (Edge)"
+        case .chrome: "Browser (Chrome)"
+        case .editorFallback: "Editor + CLI fallback"
+        case .editor: "Editor login"
+        }
+    }
+    static func supported(for provider: ProviderID) -> [Self] {
+        switch provider {
+        case .gemini, .antigravity: [.desktop, .edge, .chrome]
+        case .manus: [.edge]
+        case .kimi: [.desktop]
+        case .cursor: [.desktop, .edge, .chrome]
+        case .codex: [.cli, .edge, .chrome]
+        case .claude: [.cli, .desktop, .edge, .chrome]
+        case .copilot: [.editorFallback, .editor, .cli]
+        default: [.cli]
+        }
+    }
+}
+
+extension AppPreferences {
+    func loginMethod(for provider: ProviderID) -> ProviderLoginMethod {
+        if GoogleAIGroup.members.contains(provider) {
+            switch geminiSource { case .nativeApp: return .desktop; case .edge: return .edge; case .chrome: return .chrome }
+        }
+        if let stored = defaults.string(forKey: ProviderLoginMethod.key(for: provider)),
+           let value = ProviderLoginMethod(rawValue: stored),
+           ProviderLoginMethod.supported(for: provider).contains(value) { return value }
+
+        return ProviderLoginMethod.supported(for: provider)[0]
+    }
+
+    func setLoginMethod(_ method: ProviderLoginMethod, for provider: ProviderID) {
+        guard ProviderLoginMethod.supported(for: provider).contains(method) else { return }
+        defaults.set(UUID().uuidString, forKey: ProviderLoginMethod.selectionKey(for: provider))
+        if GoogleAIGroup.members.contains(provider) {
+            switch method {
+            case .edge: geminiSource = .edge; geminiEdgeCookiesAllowed = true
+            case .chrome: geminiSource = .chrome; geminiChromeCookiesAllowed = true
+            default: geminiSource = .nativeApp; geminiNativeAccessAllowed = true
+            }
+        } else {
+            defaults.set(method.rawValue, forKey: ProviderLoginMethod.key(for: provider))
+        }
+    }
+}
+
+extension ProviderLoginMethod {
+    static func selectionKey(for provider: ProviderID) -> String {
+        "loginMethodSelection.v1.\(GoogleAIGroup.members.contains(provider) ? ProviderID.gemini.rawValue : provider.rawValue)"
+    }
+    static func key(for provider: ProviderID) -> String { "\(provider.rawValue)LoginMethod.v1" }
+    static func selected(for provider: ProviderID) -> Self {
+        if GoogleAIGroup.members.contains(provider) {
+            switch GeminiCredentialSource.selected { case .nativeApp: return .desktop; case .edge: return .edge; case .chrome: return .chrome }
+        }
+        let supported = supported(for: provider)
+        guard let raw = UserDefaults.standard.string(forKey: key(for: provider)),
+              let value = Self(rawValue: raw), supported.contains(value) else { return supported[0] }
+        return value
+    }
+    func title(for provider: ProviderID) -> String {
+        if provider == .copilot {
+            switch self {
+            case .editorFallback: return "Auto"
+            case .editor: return "Local OAuth"
+            case .cli: return "GitHub CLI OAuth"
+            default: break
+            }
+        }
+        if GoogleAIGroup.members.contains(provider) {
+            if self == .edge { return "Browser (Edge) — Gemini" }
+            if self == .chrome { return "Browser (Chrome) — Gemini" }
+        }
+        if self == .cli, [.claude, .codex].contains(provider) { return "Local OAuth" }
+        return title
     }
 }

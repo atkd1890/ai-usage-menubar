@@ -76,14 +76,41 @@ enum ClaudeUsageMapper {
         appendWindow(body["seven_day_sonnet"], kind: .sonnet, to: &windows)
         appendFable(body["limits"], to: &windows)
 
+        let spend = ProviderParsing.object(body["spend"])
+        let enabled = spend?["enabled"] as? Bool ?? ProviderParsing.object(body["extra_usage"])?["is_enabled"] as? Bool
         return ProviderSnapshot(
             provider: .claude,
             planName: planName(credentials),
             windows: windows,
-            billingUsage: billingUsage(body["extra_usage"]),
+            billingUsage: enabled == false ? nil : (monetarySpend(spend) ?? billingUsage(body["extra_usage"])),
             resets: resets,
-            fetchedAt: now
+            fetchedAt: now,
+            usageScope: "Shared account limits · Claude Chat & Code",
+            prepaidBalance: money(spend?["balance"]),
+            additionalUsageEnabled: enabled,
+            usageBreakdown: consumptionBreakdown(body, now: now)
         )
+    }
+
+    static func consumptionBreakdown(_ body: [String: Any], now: Date) -> ConsumptionBreakdown? {
+        guard let data = ProviderParsing.object(body["seven_day_breakdown"]),
+              let rows = data["rows"] as? [[String: Any]], !rows.isEmpty,
+              let asOf = ProviderParsing.date(data["as_of"]), asOf <= now.addingTimeInterval(300),
+              let start = ProviderParsing.date(data["window_started_at"]), start <= asOf else { return nil }
+        if let reset = ProviderParsing.object(body["seven_day"]).flatMap({ ProviderParsing.date($0["resets_at"]) }),
+           (asOf >= reset || now >= reset || start >= reset || start < reset.addingTimeInterval(-604800 - 300)) { return nil }
+        var seen = Set<String>()
+        var shares: [ConsumptionShare] = []
+        for row in rows {
+            guard let key = ProviderParsing.string(row["key"]), !key.isEmpty, seen.insert(key).inserted,
+                  let title = ProviderParsing.string(row["display_name"]), !title.isEmpty,
+                  let percent = ProviderParsing.double(row["percent"]), percent.isFinite, (0...100).contains(percent) else { return nil }
+            shares.append(ConsumptionShare(id: key, title: key == "claude_code" ? "Code" : title, percent: percent))
+        }
+        let total = shares.reduce(0) { $0 + $1.percent }
+        let weeklyUsed = ProviderParsing.object(body["seven_day"]).flatMap { ProviderParsing.double($0["utilization"]) }
+        guard abs(total - 100) <= 1 || (total == 0 && weeklyUsed == 0) else { return nil }
+        return ConsumptionBreakdown(shares: shares, asOf: asOf)
     }
 
     static func resetGrants(from response: HTTPResponse) -> ClaudeResetGrants? {
@@ -166,6 +193,25 @@ enum ClaudeUsageMapper {
     /// Anthropic names these fields "credits" but reports minor units of the
     /// account's billing currency (cents for USD, unless `decimal_places`
     /// says otherwise).
+    /// Native OAuth `spend` uses typed money, not abstract AI credit counts.
+    static func money(_ value: Any?) -> MonetaryBalance? {
+        guard let object = ProviderParsing.object(value),
+              let minor = ProviderParsing.double(object["amount_minor"]), minor.isFinite, minor >= 0,
+              let exponent = ProviderParsing.double(object["exponent"]), exponent.isFinite,
+              exponent.rounded() == exponent, (0...4).contains(exponent),
+              let currency = ProviderParsing.string(object["currency"]),
+              currency.range(of: "^[A-Z]{3}$", options: .regularExpression) != nil else { return nil }
+        return MonetaryBalance(amount: minor / pow(10, exponent), currencyCode: currency)
+    }
+    private static func monetarySpend(_ spend: [String: Any]?) -> BillingUsage? {
+        guard let spend, let used = money(spend["used"]) else { return nil }
+        if let limit = money(spend["limit"]), limit.currencyCode == used.currencyCode, limit.amount > 0 {
+            return .boundedSpend(usedAmount: used.amount, limitAmount: limit.amount, currencyCode: used.currencyCode)
+        }
+        guard used.amount > 0 else { return nil }
+        return .unboundedSpend(usedAmount: used.amount, currencyCode: used.currencyCode)
+    }
+
     private static func billingUsage(_ value: Any?) -> BillingUsage? {
         guard
             let object = ProviderParsing.object(value),

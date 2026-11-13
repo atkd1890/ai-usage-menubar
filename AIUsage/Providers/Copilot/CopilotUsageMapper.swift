@@ -72,8 +72,24 @@ enum CopilotUsageMapper {
             provider: .copilot,
             planName: planName(body["copilot_plan"]),
             windows: windows,
-            fetchedAt: now
+            fetchedAt: now,
+            usageScope: "Account usage · quotas and credits shown separately"
         )
+    }
+
+    /// Credits belong to the returned bucket. Do not add Chat, Completions and
+    /// Premium together: the endpoint does not guarantee disjoint pools.
+    static func creditDetails(_ body: [String: Any]) -> [ProviderUsageDetail] {
+        guard let snapshots = ProviderParsing.object(body["quota_snapshots"]) else { return [] }
+        return [("premium_interactions", "Premium"), ("chat", "Chat"), ("completions", "Completions")].compactMap { key, title in
+            guard let bucket = ProviderParsing.object(snapshots[key]),
+                  bucket["has_quota"] as? Bool != false,
+                  let used = ProviderParsing.double(bucket["credits_used"]), used.isFinite, used >= 0 else { return nil }
+            let tokenBilling = body["token_based_billing"] as? Bool == true || bucket["token_based_billing"] as? Bool == true
+            guard tokenBilling || bucket["unlimited"] as? Bool == true || used > 0 else { return nil }
+            return ProviderUsageDetail(id: key + "-credits", title: title + " credits used",
+                value: used.formatted(.number.precision(.fractionLength(0...2))))
+        }
     }
 
     private static func quotaWindow(
@@ -81,7 +97,7 @@ enum CopilotUsageMapper {
         kind: QuotaKind,
         resetsAt: Date?
     ) -> QuotaWindow? {
-        guard let bucket = ProviderParsing.object(value) else { return nil }
+        guard let bucket = ProviderParsing.object(value), bucket["has_quota"] as? Bool != false else { return nil }
         let entitlement = ProviderParsing.double(bucket["entitlement"])
         let remaining = ProviderParsing.double(bucket["remaining"])
 
@@ -96,6 +112,7 @@ enum CopilotUsageMapper {
         if let percentRemaining = ProviderParsing.double(
             bucket["percent_remaining"]
         ) {
+            guard percentRemaining.isFinite else { return nil }
             usedPercent = clampPercent(100 - percentRemaining)
         } else if let entitlement, entitlement > 0, let remaining {
             usedPercent = clampPercent(

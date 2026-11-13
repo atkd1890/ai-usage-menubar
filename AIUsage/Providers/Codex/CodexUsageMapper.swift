@@ -83,10 +83,21 @@ enum CodexUsageMapper {
             billingUsage: billingUsage(response: response, body: body),
             resets: resets(
                 embeddedCount: embeddedResetCount(body),
-                list: resetCreditList
+                list: resetCreditList,
+                usableCount: ProviderParsing.object(body["rate_limit_reset_credits"])
+                    .flatMap { availableResetCount(["available_count": $0["applicable_available_count"] as Any]) }
             ),
-            fetchedAt: now
+            fetchedAt: now,
+            accountEmail: AccountEmail.validated(body["email"]),
+            usageScope: "Shared allowance · Codex & ChatGPT Work"
         )
+    }
+
+    static func applicableResetDetails(_ body: [String: Any]) -> [ProviderUsageDetail] {
+        guard let resets = ProviderParsing.object(body["rate_limit_reset_credits"]),
+              let count = ProviderParsing.double(resets["applicable_available_count"]),
+              count.isFinite, count >= 0, count < Double(Int32.max) else { return [] }
+        return [ProviderUsageDetail(id: "applicable-resets", title: "Resets usable now", value: String(Int(count)))]
     }
 
     /// The count of banked resets in this usage response, if it has one.
@@ -109,15 +120,16 @@ enum CodexUsageMapper {
     /// so it never stands in for a reset spent or granted since.
     static func resets(
         embeddedCount: Int?,
-        list: CodexResetCreditList?
+        list: CodexResetCreditList?,
+        usableCount: Int? = nil
     ) -> UsageResets? {
         guard let count = embeddedCount ?? list?.availableCount else {
             return nil
         }
         guard let list, list.availableCount == count else {
-            return UsageResets(availableCount: count)
+            return UsageResets(availableCount: count, usableCount: usableCount)
         }
-        return UsageResets(availableCount: count, expirations: list.expirations)
+        return UsageResets(availableCount: count, expirations: list.expirations, usableCount: usableCount)
     }
 
     static func planName(_ value: Any?) -> String? {

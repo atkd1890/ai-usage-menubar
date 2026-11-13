@@ -61,7 +61,8 @@ enum AntigravityUsageMapper {
                 (order.firstIndex(of: $0.kind) ?? order.count) <
                     (order.firstIndex(of: $1.kind) ?? order.count)
             },
-            fetchedAt: now
+            fetchedAt: now,
+            usageScope: "Antigravity quota · separate from Gemini app"
         )
     }
 

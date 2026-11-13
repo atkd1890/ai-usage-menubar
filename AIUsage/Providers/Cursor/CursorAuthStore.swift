@@ -3,6 +3,7 @@ import Foundation
 struct CursorAuthState: Equatable, Sendable {
     enum Source: Equatable, Sendable {
         case sqlite
+        case sqliteEncrypted
         case keychain
     }
 
@@ -34,9 +35,26 @@ struct CursorAuthStore: Sendable {
         self.dateProvider = dateProvider
     }
 
-    func load() -> CursorAuthState? {
-        let sqliteAccess = stateValue(Self.accessTokenKey)
-        let sqliteRefresh = stateValue(Self.refreshTokenKey)
+    func load() throws -> CursorAuthState? {
+        let storedAccess = stateValue(Self.accessTokenKey)
+        let storedRefresh = stateValue(Self.refreshTokenKey)
+        let encrypted = [storedAccess, storedRefresh].contains {
+            $0?.hasPrefix("cursor-safe-storage:") == true
+        }
+        var password: String?
+        func decode(_ value: String?) throws -> String? {
+            guard let value, value.hasPrefix("cursor-safe-storage:") else { return value }
+            let key: String
+            if let password {
+                key = password
+            } else {
+                key = try safeStoragePassword()
+                password = key
+            }
+            return try CursorTokenCodec.decode(value, password: key)
+        }
+        let sqliteAccess = try decode(storedAccess)
+        let sqliteRefresh = try decode(storedRefresh)
         let membership = stateValue(Self.membershipTypeKey)?.lowercased()
         let keychainAccess = keychainValue(Self.accessTokenService)
         let keychainRefresh = keychainValue(Self.refreshTokenService)
@@ -58,7 +76,7 @@ struct CursorAuthStore: Sendable {
             return CursorAuthState(
                 accessToken: sqliteAccess,
                 refreshToken: sqliteRefresh,
-                source: .sqlite
+                source: encrypted ? .sqliteEncrypted : .sqlite
             )
         }
 
@@ -86,11 +104,17 @@ struct CursorAuthStore: Sendable {
         source: CursorAuthState.Source
     ) throws {
         switch source {
-        case .sqlite:
+        case .sqlite, .sqliteEncrypted:
+            let storedToken: String
+            if source == .sqliteEncrypted {
+                storedToken = try CursorTokenCodec.encode(token, password: safeStoragePassword())
+            } else {
+                storedToken = token
+            }
             let sql =
                 "INSERT OR REPLACE INTO ItemTable (key, value) VALUES " +
                 "('\(Self.sqlEscaped(Self.accessTokenKey))', " +
-                "'\(Self.sqlEscaped(token))');"
+                "'\(Self.sqlEscaped(storedToken))');"
             try sqlite.execute(path: Self.stateDatabasePath, sql: sql)
         case .keychain:
             try keychain.writeGenericPassword(
@@ -98,6 +122,21 @@ struct CursorAuthStore: Sendable {
                 value: token
             )
         }
+    }
+
+    private func safeStoragePassword() throws -> String {
+        let password: String?
+        do {
+            password = try keychain.readGenericPassword(service: CursorTokenCodec.keychainService)
+        } catch {
+            throw ProviderFailure(.storage,
+                "Cannot access Cursor Safe Storage in Keychain. Allow access and refresh again.")
+        }
+        guard let password, !password.isEmpty else {
+            throw ProviderFailure(.storage,
+                "Cursor Safe Storage key is missing. Open Cursor and sign in again.")
+        }
+        return password
     }
 
     private func stateValue(_ key: String) -> String? {

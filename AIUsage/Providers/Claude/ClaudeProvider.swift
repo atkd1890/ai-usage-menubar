@@ -7,6 +7,8 @@ actor ClaudeProvider: UsageProvider {
     private let authStore: ClaudeAuthStore
     private let client: ClaudeUsageClient
     private let dateProvider: DateProviding
+    private let identity: AccountIdentityClient?
+    private let identityCache = AccountIdentityCache(provider: .claude, source: "oauth")
     private var activeCredentialFingerprint: Data?
     private var rateLimitedUntil: Date?
     private var rateLimitStrikes = 0
@@ -20,11 +22,13 @@ actor ClaudeProvider: UsageProvider {
     init(
         authStore: ClaudeAuthStore = ClaudeAuthStore(),
         client: ClaudeUsageClient = ClaudeUsageClient(),
-        dateProvider: DateProviding = SystemDateProvider()
+        dateProvider: DateProviding = SystemDateProvider(),
+        identity: AccountIdentityClient? = nil
     ) {
         self.authStore = authStore
         self.client = client
         self.dateProvider = dateProvider
+        self.identity = identity
     }
 
     func fetch() async throws -> ProviderSnapshot {
@@ -169,6 +173,10 @@ actor ClaudeProvider: UsageProvider {
         rateLimitedUntil = nil
         rateLimitStrikes = 0
         generation = expectedGeneration
+        if let identity, let token = state.oauth.accessToken {
+            let email = await identityCache.read(credential: state.oauth.refreshToken ?? token) { try await identity.claudeOAuth(token) }
+            return snapshot.withCredential(source: "Claude Code OAuth", account: email, email: email)
+        }
         return snapshot
     }
 
@@ -223,6 +231,7 @@ actor ClaudeProvider: UsageProvider {
         }
 
         let previousFingerprint = Self.fingerprint(state.oauth)
+        let previousIdentityCredential = state.oauth.refreshToken ?? state.oauth.accessToken
         state.oauth.accessToken = decoded.accessToken
         if let refreshToken = nonEmpty(decoded.refreshToken) {
             state.oauth.refreshToken = refreshToken
@@ -242,6 +251,9 @@ actor ClaudeProvider: UsageProvider {
             throw ProviderFailure(.storage, "Claude's refreshed login could not be saved.")
         }
         expectedGeneration = expectedGeneration.replacing(state)
+        if let before = previousIdentityCredential, let after = state.oauth.refreshToken ?? state.oauth.accessToken {
+            await identityCache.rebindAfterRefresh(from: before, to: after)
+        }
         if activeCredentialFingerprint == previousFingerprint {
             activeCredentialFingerprint = Self.fingerprint(state.oauth)
         }

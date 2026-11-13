@@ -10,20 +10,37 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
     case grok
     case kiro
     case zai
+    case gemini
+    case manus
+    case kimi
 
+    // Keep enum cases for decoding saved preferences; only these providers run/show.
+    static let enabledCases: [Self] = [
+        .claude, .codex, .cursor, .antigravity, .copilot,
+        // .devin,
+        // .grok, // Grok Build (CLI): temporarily hidden.
+        // .kiro,
+        // .zai,
+        .gemini, .manus, .kimi
+    ]
+
+    var isEnabledInBuild: Bool { Self.enabledCases.contains(self) }
     var id: Self { self }
 
     var displayName: String {
         switch self {
-        case .claude: "Claude Code"
+        case .claude: "Claude"
         case .codex: "Codex"
         case .cursor: "Cursor"
         case .antigravity: "Antigravity"
         case .copilot: "GitHub Copilot"
         case .devin: "Devin"
-        case .grok: "Grok"
+        case .grok: "Grok Build (CLI)"
         case .kiro: "Kiro"
         case .zai: "Z.ai"
+        case .manus: "Manus"
+        case .kimi: "Kimi"
+        case .gemini: "Gemini"
         }
     }
 
@@ -38,6 +55,9 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .grok: "ProviderGrok"
         case .kiro: "ProviderKiro"
         case .zai: "ProviderZAI"
+        case .manus: "ProviderManus"
+        case .kimi: "ProviderKimi"
+        case .gemini: "ProviderGemini"
         }
     }
 
@@ -68,7 +88,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .devin: ["devin"]
         case .grok: ["grok"]
         case .kiro: ["kiro", "kiro-cli"]
-        case .zai: []
+        case .zai, .gemini, .manus, .kimi: []
         }
     }
 
@@ -88,7 +108,8 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
             [
                 "/Applications/Antigravity.app",
                 "~/Applications/Antigravity.app",
-                "~/Library/Application Support/Antigravity"
+                "~/Library/Application Support/Antigravity",
+                GeminiNativeAuthStore.root + "/account_config"
             ]
         case .copilot:
             [
@@ -113,6 +134,13 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
                 "~/Library/Application Support/Kiro",
                 "~/.local/bin/kiro-cli"
             ]
+        case .gemini:
+            [GeminiNativeAuthStore.root + "/account_config"] +
+                GeminiCredentialSource.edge.cookiePaths + GeminiCredentialSource.chrome.cookiePaths
+        case .manus:
+            ["~/Library/Application Support/Microsoft Edge/Default/Cookies"]
+        case .kimi:
+            ["~/Library/Application Support/kimi-desktop/Local Storage/leveldb"]
         case .zai:
             []
         }
@@ -120,9 +148,11 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
 
     var defaultMenuBarMetric: MenuBarMetricID {
         switch self {
+        case .manus: .daily
+        case .kimi: .totalUsage
         case .cursor: .totalUsage
         case .copilot, .kiro: .credits
-        case .claude, .codex, .antigravity, .devin, .grok, .zai: .weekly
+        case .claude, .codex, .antigravity, .devin, .grok, .zai, .gemini: .weekly
         }
     }
 }
@@ -162,8 +192,8 @@ enum QuotaKind: String, Codable, Hashable, Sendable {
         case .credits: "Credits"
         case .chat: "Chat"
         case .completions: "Completions"
-        case .claudePool: "Claude"
-        case .claudePoolWeekly: "Claude Weekly"
+        case .claudePool: "3rd-party"
+        case .claudePoolWeekly: "3rd-party Weekly"
         case .argonWeekly: "Argon Weekly"
         case .webSearches: "Web Searches"
         case .freeTrial: "Free Trial"
@@ -232,8 +262,8 @@ enum MenuBarMetricID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .apiUsage: "API Usage"
         case .chat: "Chat"
         case .completions: "Completions"
-        case .claudePool: "Claude"
-        case .claudePoolWeekly: "Claude Weekly"
+        case .claudePool: "3rd-party"
+        case .claudePoolWeekly: "3rd-party Weekly"
         case .argonWeekly: "Argon Weekly"
         case .webSearches: "Web Searches"
         case .freeTrial: "Free Trial"
@@ -282,8 +312,8 @@ enum MenuBarMetricID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .apiUsage: "API"
         case .chat: "Ch"
         case .completions: "Co"
-        case .claudePool: "Cl"
-        case .claudePoolWeekly: "ClW"
+        case .claudePool: "3P"
+        case .claudePoolWeekly: "3PW"
         case .argonWeekly: "ArW"
         case .webSearches: "WS"
         case .freeTrial: "FT"
@@ -348,7 +378,7 @@ struct ProviderDescriptor: Identifiable, Sendable {
 }
 
 enum ProviderCatalog {
-    static let all = ProviderID.allCases.map(\.descriptor)
+    static let all = ProviderID.enabledCases.map(\.descriptor)
 
     static func descriptor(for provider: ProviderID) -> ProviderDescriptor {
         provider.descriptor
@@ -421,9 +451,11 @@ struct UsageResets: Equatable, Sendable {
     /// Known expiration of each available reset, soonest first. Holds fewer
     /// entries than `availableCount` when the provider omits some details.
     let expirations: [Date]
+    let usableCount: Int?
 
-    init(availableCount: Int, expirations: [Date] = []) {
+    init(availableCount: Int, expirations: [Date] = [], usableCount: Int? = nil) {
         self.availableCount = max(availableCount, 0)
+        self.usableCount = usableCount.map { min(max($0, 0), max(availableCount, 0)) }
         self.expirations = Array(expirations.sorted().prefix(self.availableCount))
     }
 
@@ -437,9 +469,53 @@ struct UsageResets: Equatable, Sendable {
         let expired = expirations.filter { $0 <= now }.count
         return UsageResets(
             availableCount: availableCount - expired,
-            expirations: expirations.filter { $0 > now }
+            expirations: expirations.filter { $0 > now },
+            usableCount: usableCount
         )
     }
+}
+
+struct UnifiedProductUsage: Equatable, Sendable, Identifiable {
+    let product: String
+    let usedCents: Double
+    var id: String { product }
+    var title: String {
+        switch product {
+        case "cursor": "Cursor"
+        case "grok-chat": "Grok Chat"
+        default: product
+        }
+    }
+}
+
+struct XSubscriptionUsage: Equatable, Sendable {
+    let products: [UnifiedProductUsage]
+    let prepaidDollars: Double?
+    let additionalUsageResetsAt: Date?
+    let additionalUsageEnabled: Bool?
+    let additionalUsageUnavailable: Bool
+}
+
+struct ConsumptionShare: Equatable, Sendable, Identifiable {
+    let id: String
+    let title: String
+    let percent: Double
+}
+
+struct ConsumptionBreakdown: Equatable, Sendable {
+    let shares: [ConsumptionShare]
+    let asOf: Date?
+}
+
+struct MonetaryBalance: Equatable, Sendable {
+    let amount: Double
+    let currencyCode: String
+}
+
+struct ProviderUsageDetail: Equatable, Sendable, Identifiable {
+    let id: String
+    let title: String
+    let value: String
 }
 
 struct ProviderSnapshot: Equatable, Sendable {
@@ -449,6 +525,58 @@ struct ProviderSnapshot: Equatable, Sendable {
     let billingUsage: BillingUsage?
     let resets: UsageResets?
     let fetchedAt: Date
+    let xSubscription: XSubscriptionUsage?
+    var displayName: String { xSubscription == nil ? provider.displayName : "X Subscription" }
+    var dashboardSubtitle: String? {
+        if xSubscription != nil { return "Shared weekly pool • Cursor & Grok" }
+        switch provider {
+        case .claude: return "Shared account limits • Chat, Code & Cowork"
+        case .codex: return "Shared allowance • Codex & ChatGPT Work"
+        case .copilot: return "Account usage • GitHub Copilot"
+        case .cursor: return "Product usage • Cursor"
+        case .gemini, .antigravity: return nil // Google AI group owns the subtitle.
+        default: return usageScope
+        }
+    }
+
+    let credentialSource: String?
+    let accountLabel: String?
+    let accountEmail: String?
+    let usageScope: String?
+    let usageDetails: [ProviderUsageDetail]
+    let prepaidBalance: MonetaryBalance?
+    let additionalUsageEnabled: Bool?
+    let usageBreakdown: ConsumptionBreakdown?
+
+    var identityEmail: String? {
+        accountEmail ?? (GoogleAIGroup.members.contains(provider) ? AccountEmail.validated(accountLabel) : nil)
+    }
+
+    var consumptionShares: [ConsumptionShare] {
+        if let usageBreakdown { return usageBreakdown.shares }
+        guard let products = xSubscription?.products else { return [] }
+        let total = products.reduce(0) { $0 + $1.usedCents }
+        return products.map { ConsumptionShare(id: $0.product, title: $0.title,
+            percent: total > 0 ? $0.usedCents / total * 100 : 0) }
+    }
+
+    /// Raw credit counts and their estimated dollar conversions are not cash balances.
+    var displayedBillingUsage: BillingUsage? {
+        if case .flexCreditBalance = billingUsage { return nil }
+        return billingUsage
+    }
+    var displayedBalance: MonetaryBalance? {
+        prepaidBalance ?? xSubscription?.prepaidDollars.map { MonetaryBalance(amount: $0, currencyCode: "USD") }
+    }
+    var hasAdditionalUsageSection: Bool {
+        guard (additionalUsageEnabled ?? xSubscription?.additionalUsageEnabled) != false else { return false }
+        if let balance = displayedBalance, balance.amount.isFinite, balance.amount > 0 { return true }
+        switch displayedBillingUsage {
+        case let .boundedSpend(used, limit, _): return used > 0 || limit > 0
+        case let .unboundedSpend(used, _): return used > 0
+        default: return false
+        }
+    }
 
     init(
         provider: ProviderID,
@@ -456,7 +584,16 @@ struct ProviderSnapshot: Equatable, Sendable {
         windows: [QuotaWindow],
         billingUsage: BillingUsage? = nil,
         resets: UsageResets? = nil,
-        fetchedAt: Date
+        fetchedAt: Date,
+        xSubscription: XSubscriptionUsage? = nil,
+        credentialSource: String? = nil,
+        accountLabel: String? = nil,
+        accountEmail: String? = nil,
+        usageScope: String? = nil,
+        usageDetails: [ProviderUsageDetail] = [],
+        prepaidBalance: MonetaryBalance? = nil,
+        additionalUsageEnabled: Bool? = nil,
+        usageBreakdown: ConsumptionBreakdown? = nil
     ) {
         self.provider = provider
         self.planName = planName
@@ -464,12 +601,23 @@ struct ProviderSnapshot: Equatable, Sendable {
         self.billingUsage = billingUsage
         self.resets = resets
         self.fetchedAt = fetchedAt
+        self.xSubscription = xSubscription
+        self.credentialSource = credentialSource
+        self.accountLabel = accountLabel
+        self.accountEmail = AccountEmail.validated(accountEmail)
+        self.usageScope = usageScope ?? (provider == .gemini ? "Gemini app quota · separate from Antigravity" : nil)
+        self.usageDetails = usageDetails
+        self.prepaidBalance = prepaidBalance
+        self.additionalUsageEnabled = additionalUsageEnabled
+        self.usageBreakdown = usageBreakdown
     }
 
     /// Whether the panel has anything to show beyond the provider header.
     var hasPanelContent: Bool {
         !windows.isEmpty ||
-            billingUsage != nil ||
+            !consumptionShares.isEmpty ||
+            !usageDetails.isEmpty ||
+            hasAdditionalUsageSection ||
             (resets?.availableCount ?? 0) > 0
     }
 
@@ -479,6 +627,9 @@ struct ProviderSnapshot: Equatable, Sendable {
 
     func window(for metric: MenuBarMetricID) -> QuotaWindow? {
         guard let quotaKind = metric.quotaKind else { return nil }
+        if xSubscription != nil, [.totalUsage, .autoUsage, .apiUsage].contains(metric) {
+            return windows.first { $0.kind == .weekly }
+        }
         return windows.first { $0.kind == quotaKind }
     }
 
@@ -486,7 +637,10 @@ struct ProviderSnapshot: Equatable, Sendable {
         var items = windows.map {
             MenuBarItemID(provider: provider, metric: $0.kind.menuBarMetric)
         }
-        if let billingUsage {
+        if xSubscription != nil {
+            items += [.totalUsage, .autoUsage, .apiUsage].map { MenuBarItemID(provider: provider, metric: $0) }
+        }
+        if let billingUsage = displayedBillingUsage {
             items.append(MenuBarItemID(
                 provider: provider,
                 metric: billingUsage.menuBarMetric
@@ -511,8 +665,8 @@ struct ProviderSnapshot: Equatable, Sendable {
         if metric == .resets, let resets {
             return .resets(available: resets.availableCount)
         }
-        guard billingUsage?.menuBarMetric == metric else { return nil }
-        return billingUsage?.menuBarValue(displayMode: displayMode)
+        guard displayedBillingUsage?.menuBarMetric == metric else { return nil }
+        return displayedBillingUsage?.menuBarValue(displayMode: displayMode)
     }
 
     func primaryWindow(for selection: MenuBarWindow) -> QuotaWindow? {
@@ -593,7 +747,7 @@ enum MenuBarSelection: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .automatic: "Auto — Highest usage"
         case .all: "All providers"
-        case .claude: "Claude Code"
+        case .claude: "Claude"
         case .codex: "Codex"
         }
     }
@@ -698,4 +852,38 @@ protocol DateProviding: Sendable {
 
 struct SystemDateProvider: DateProviding {
     func now() -> Date { Date() }
+}
+
+
+/// Presentation grouping only: provider IDs, authentication and quota remain independent.
+enum GoogleAIGroup {
+    static let members: Set<ProviderID> = [.gemini, .antigravity]
+
+    /// Anchor the group at its first member; preserve each child's stored relative order.
+    static func ordered(_ providers: [ProviderID]) -> [ProviderID] {
+        let children = providers.filter { members.contains($0) }
+        var inserted = false
+        return providers.flatMap { provider -> [ProviderID] in
+            guard members.contains(provider) else { return [provider] }
+            guard !inserted else { return [] }
+            inserted = true
+            return children
+        }
+    }
+
+    static func sharedEmail(_ states: [ProviderState]) -> String? {
+        guard !states.isEmpty, states.allSatisfy({ $0.snapshot?.identityEmail != nil }) else { return nil }
+        let emails = states.compactMap { $0.snapshot?.identityEmail }
+        return Set(emails.map { $0.lowercased() }).count == 1 ? emails.first : nil
+    }
+
+    static func sharedPlan(_ states: [ProviderState]) -> String? {
+        if states.count == 1 { return states.first?.snapshot?.planName }
+        // Equal subscription names do not prove both adapters use the same Google account.
+        guard !states.isEmpty,
+              states.allSatisfy({ $0.snapshot?.accountLabel?.isEmpty == false }),
+              Set(states.compactMap { $0.snapshot?.accountLabel?.lowercased() }).count == 1,
+              Set(states.compactMap { $0.snapshot?.planName }.filter { !$0.isEmpty }).count == 1 else { return nil }
+        return states.compactMap { $0.snapshot?.planName }.first { !$0.isEmpty }
+    }
 }

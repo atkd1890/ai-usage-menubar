@@ -128,7 +128,17 @@ struct SystemProviderAvailabilityChecker: ProviderAvailabilityChecking {
         await Task.detached(priority: .utility) {
             let path = environment.value(for: "PATH") ?? ""
 
-            return Set(ProviderID.allCases.filter { provider in
+            return Set(ProviderID.enabledCases.filter { provider in
+                let method = ProviderLoginMethod.selected(for: provider)
+                if [.claude, .codex, .cursor, .gemini].contains(provider), method == .edge || method == .chrome {
+                    let source: WebSessionSource = method == .edge ? .edge : .chrome
+                    let base = "~/Library/Application Support/\(source.directory)/"
+                    return Self.fileExists(at: base + "Cookies") || Self.fileExists(at: base + "Network/Cookies")
+                }
+                if provider == .claude, method == .desktop {
+                    return Self.fileExists(at: "~/Library/Application Support/Claude/Cookies") ||
+                        Self.fileExists(at: "~/Library/Application Support/Claude/Network/Cookies")
+                }
                 if provider.isDetectedByCredential {
                     return Self.hasCredential(for: provider)
                 }

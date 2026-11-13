@@ -22,19 +22,27 @@ struct CopilotAuthStore: Sendable {
     }
 
     func loadToken() -> CopilotToken? {
-        loadFromEditorConfig() ?? loadFromGitHubCLIFile() ?? loadFromKeychain()
+        loadFromEditorConfig() ?? loadFallbackTokens().first
     }
 
     func loadFromEditorConfig() -> CopilotToken? {
+        loadEditorTokens().first
+    }
+
+    func loadEditorTokens() -> [CopilotToken] {
+        var tokens: [CopilotToken] = []
         for path in [Self.editorAppsPath, Self.editorHostsPath] {
-            guard files.exists(path),
-                  let text = try? files.readText(path),
-                  let token = Self.oauthToken(fromEditorJSON: text) else {
+            guard files.exists(path), let text = try? files.readText(path) else {
                 continue
             }
-            return CopilotToken(value: token)
+            tokens += Self.oauthTokens(fromEditorJSON: text).map { CopilotToken(value: $0) }
         }
-        return nil
+        return tokens
+    }
+
+    /// Read Keychain only after editor credentials have been rejected or are absent.
+    func loadFallbackTokens() -> [CopilotToken] {
+        [loadFromGitHubCLIFile(), loadFromKeychain()].compactMap { $0 }
     }
 
     func loadFromGitHubCLIFile() -> CopilotToken? {
@@ -59,24 +67,21 @@ struct CopilotAuthStore: Sendable {
     }
 
     static func oauthToken(fromEditorJSON text: String) -> String? {
-        guard let data = text.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(
-                with: data
-              ) as? [String: Any] else {
-            return nil
-        }
+        oauthTokens(fromEditorJSON: text).first
+    }
 
-        for (host, rawValue) in object
-        where host == "github.com" || host.hasPrefix("github.com:") {
-            guard let value = rawValue as? [String: Any],
-                  let token = (value["oauth_token"] as? String)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines),
-                  !token.isEmpty else {
-                continue
-            }
-            return token
+    static func oauthTokens(fromEditorJSON text: String) -> [String] {
+        guard let data = text.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return []
         }
-        return nil
+        return object.keys.sorted().compactMap { host in
+            guard host == "github.com" || host.hasPrefix("github.com:"),
+                  let value = object[host] as? [String: Any],
+                  let raw = value["oauth_token"] as? String else { return nil }
+            let token = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            return token.isEmpty ? nil : token
+        }
     }
 
     static func yamlValue(
