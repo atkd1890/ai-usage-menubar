@@ -51,7 +51,6 @@ final class UsageStore {
 
     private let providers: [any UsageProvider]
     private let availabilityChecker: any ProviderAvailabilityChecking
-    private let loginMethod: @Sendable (ProviderID) -> ProviderLoginMethod
     private var cadenceTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
     private var refreshGeneration = 0
@@ -63,14 +62,12 @@ final class UsageStore {
         availabilityChecker: any ProviderAvailabilityChecking =
             SystemProviderAvailabilityChecker(),
         refreshInterval: RefreshIntervalOption = .fiveMinutes,
-        trackedProviderIDs: Set<ProviderID> = Set(ProviderID.allCases),
-        loginMethod: @escaping @Sendable (ProviderID) -> ProviderLoginMethod = { .selected(for: $0) }
+        trackedProviderIDs: Set<ProviderID> = Set(ProviderID.allCases)
     ) {
         self.analytics = analytics ?? TokenAnalytics(enabled: false)
         self.history = history ?? UsageHistory()
         self.providers = providers ?? Self.defaultProviders()
         self.availabilityChecker = availabilityChecker
-        self.loginMethod = loginMethod
         self.refreshInterval = refreshInterval
         self.trackedProviderIDs = trackedProviderIDs
         states = Dictionary(uniqueKeysWithValues: ProviderID.allCases.map {
@@ -82,8 +79,8 @@ final class UsageStore {
         let google = GoogleAISession()
         return [CredentialSelectingProvider(local: ClaudeProvider(identity: AccountIdentityClient())), CredentialSelectingProvider(local: CodexProvider()),
                 CredentialSelectingProvider(local: CursorProvider(identity: AccountIdentityClient())),
-                ConsumerQuotaProvider(id: .manus), ConsumerQuotaProvider(id: .kimi),
-                GoogleAIAntigravityProvider(session: google), CopilotProvider(method: { .selected(for: .copilot) }, identity: AccountIdentityClient()),
+                ConsumerQuotaProvider(id: .manus), ConsumerQuotaProvider(id: .kimi), MuseProvider(),
+                AntigravityDesktopProvider(), CopilotProvider(method: { .selected(for: .copilot) }, identity: AccountIdentityClient()),
                 // GrokProvider(), // Grok Build (CLI): temporarily disabled.
                 // Devin, Kiro and Z.ai remain temporarily disabled.
                 GeminiProvider(native: GeminiNativeProvider(session: google), identity: AccountIdentityClient())]
@@ -157,7 +154,6 @@ final class UsageStore {
         let providers = self.providers
         let trackedProviderIDs = self.trackedProviderIDs
         let availabilityChecker = self.availabilityChecker
-        let supportedSources = Set(providers.map(\.id).filter(isSupportedByLoginMethod))
         let task = Task { [weak self] in
             let installedProviders =
                 await availabilityChecker.installedProviders()
@@ -165,13 +161,10 @@ final class UsageStore {
 
             self?.applyInstalledProviders(installedProviders)
 
-            for id in providers.map(\.id) where !supportedSources.contains(id) {
-                self?.states[id] = ProviderState(provider: id)
-            }
             let requested = requestedProviderIDs ?? trackedProviderIDs
             let effectiveProviders = providers.filter { provider in
                 provider.id.isEnabledInBuild &&
-                    trackedProviderIDs.contains(provider.id) && supportedSources.contains(provider.id) &&
+                    trackedProviderIDs.contains(provider.id) &&
                     requested.contains(provider.id) &&
                     (installedProviders?.contains(provider.id) ?? true)
             }
@@ -224,20 +217,15 @@ final class UsageStore {
         }
     }
 
-    private func isSupportedByLoginMethod(_ provider: ProviderID) -> Bool {
-        guard provider == .antigravity else { return true }
-        return ![ProviderLoginMethod.edge, .chrome].contains(loginMethod(.gemini))
-    }
-
     func isProviderVisibleInDashboard(_ provider: ProviderID) -> Bool {
-        isSupportedByLoginMethod(provider) && provider.isEnabledInBuild && trackedProviderIDs.contains(provider) &&
+        provider.isEnabledInBuild && trackedProviderIDs.contains(provider) &&
             states[provider]?.isToolInstalled != false
     }
 
     func availableMenuBarItems(
         for provider: ProviderID
     ) -> [MenuBarItemID] {
-        guard isSupportedByLoginMethod(provider), provider.isEnabledInBuild, trackedProviderIDs.contains(provider),
+        guard provider.isEnabledInBuild, trackedProviderIDs.contains(provider),
               states[provider]?.isToolInstalled != false else {
             return []
         }

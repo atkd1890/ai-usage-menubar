@@ -76,7 +76,7 @@ final class UsageHistory {
     func record(_ snapshot: ProviderSnapshot) {
         // One sample per metric/account/hour; retain the latest observation.
         // Different login sources/accounts never become one historical series.
-        guard let email = snapshot.identityEmail else { return }
+        guard let email = snapshot.historyIdentity else { return }
         let date = Date(timeIntervalSince1970: floor(snapshot.fetchedAt.timeIntervalSince1970 / 3600) * 3600)
         let account = "\(snapshot.credentialSource ?? "selected")|\(email)"
         for window in snapshot.windows where window.usedPercent.isFinite {

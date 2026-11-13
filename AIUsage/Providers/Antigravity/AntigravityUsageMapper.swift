@@ -13,7 +13,7 @@ enum AntigravityUsageMapper {
         "gemini-argon-weekly"
     ]
     private static let order: [QuotaKind] = [
-        .session, .weekly, .argonWeekly, .claudePool, .claudePoolWeekly
+        .session, .weekly, .claudePool, .claudePoolWeekly, .argonWeekly
     ]
     private static let paidTierPlans = [
         "g1-pro-tier": "Google AI Pro",
@@ -39,7 +39,7 @@ enum AntigravityUsageMapper {
         where ProviderParsing.string(group["displayName"]) != argonGroupName {
             for bucket in ProviderParsing.array(group["buckets"]) {
                 guard let identifier = ProviderParsing.string(bucket["bucketId"]),
-                      let kind = sharedPoolKinds[identifier],
+                      let kind = sharedPoolKinds[identifier], bucket["disabled"] as? Bool != true,
                       !windows.contains(where: { $0.kind == kind }),
                       let window = window(kind: kind, bucket: bucket)
                 else {
@@ -54,6 +54,24 @@ enum AntigravityUsageMapper {
             windows.append(argon)
         }
 
+        var notices: [ProviderUsageDetail] = []
+        var seen = Set<String>()
+        for group in groupLists.joined() {
+            for bucket in ProviderParsing.array(group["buckets"]) {
+                guard let id = ProviderParsing.string(bucket["bucketId"]), sharedPoolKinds[id] == nil,
+                      !argonBucketIDs.contains(id), ProviderParsing.string(group["displayName"]) != argonGroupName,
+                      bucket["disabled"] as? Bool != true, !seen.contains(id) else { continue }
+                guard let remaining = bucket["remainingFraction"], !(remaining is NSNull) else { continue }
+                let groupName = ProviderParsing.string(group["displayName"]) ?? QuotaDiscovery.name(id)
+                let cadence = ProviderParsing.string(bucket["window"]).map(QuotaDiscovery.name) ?? "Quota"
+                if let window = QuotaDiscovery.window(id: "antigravity." + id, title: groupName + " · " + cadence,
+                    used: QuotaDiscovery.fraction(bucket["remainingFraction"]), reset: ProviderParsing.date(bucket["resetTime"])) {
+                    windows.append(window)
+                    seen.insert(id)
+                } else { notices.append(QuotaDiscovery.notice(id)) }
+            }
+        }
+
         return ProviderSnapshot(
             provider: .antigravity,
             planName: planName,
@@ -62,12 +80,13 @@ enum AntigravityUsageMapper {
                     (order.firstIndex(of: $1.kind) ?? order.count)
             },
             fetchedAt: now,
-            usageScope: "Antigravity quota · separate from Gemini app"
+            usageScope: "Antigravity quota · separate from Gemini app",
+            usageDetails: notices
         )
     }
 
-    /// Whether one body already holds every shared pool, so the other host
-    /// cannot change the merged result.
+    /// A shared-pool-only answer can omit Argon. Stop host fallback only once
+    /// every shared pool plus an actual Argon reading is available.
     static func isCompleteSummary(_ data: Data) -> Bool {
         guard let groups = groups(data) else { return false }
         let usable = Set(groups
@@ -82,7 +101,7 @@ enum AntigravityUsageMapper {
                 }
                 return ProviderParsing.string(bucket["bucketId"])
             })
-        return sharedPoolKinds.keys.allSatisfy(usable.contains)
+        return sharedPoolKinds.keys.allSatisfy(usable.contains) && argonWindow(groups) != nil
     }
 
     static func containsSummary(_ data: Data) -> Bool {
@@ -181,7 +200,7 @@ enum AntigravityUsageMapper {
         let clamped = min(max(remaining, 0), 1)
         return QuotaWindow(
             kind: kind,
-            usedPercent: ((1 - clamped) * 100).rounded(),
+            usedPercent: ((1 - clamped) * 10_000).rounded() / 100,
             resetsAt: ProviderParsing.date(bucket["resetTime"])
         )
     }

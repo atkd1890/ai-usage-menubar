@@ -62,7 +62,7 @@ nonisolated enum AlertRules {
         }
     }
     func receive(_ snapshot: ProviderSnapshot) {
-        guard let email = snapshot.identityEmail else { return }
+        guard let email = snapshot.historyIdentity else { return }
         let account = "\(snapshot.provider.rawValue)|\(snapshot.credentialSource ?? "selected")|\(email)"
         defer { previous[account] = snapshot }
         let old = previous[account]

@@ -5,13 +5,13 @@ final class ConsumerQuotaTests: XCTestCase {
     func testKimiRefreshIsScopedRetriedOnceAndCachedOnlyForSameNativeSession() async throws {
         let subscription = httpResponse(json: #"{"subscription":{"goods":{"title":"Free"}}}"#)
         let stats = httpResponse(json: #"{"subscriptionBalance":{"feature":"FEATURE_OMNI","amountUsedRatio":0}}"#)
-        let http = MockHTTPClient([httpResponse(401), httpResponse(json: #"{"access_token":"new-access","refresh_token":"new-refresh"}"#), subscription, stats, subscription, stats])
+        let http = MockHTTPClient([httpResponse(401), httpResponse(json: #"{"access_token":"new-access","refresh_token":"new-refresh"}"#), subscription, stats, httpResponse(json: "{}"), subscription, stats, httpResponse(json: "{}")])
         let provider = ConsumerQuotaProvider(id: .kimi, http: http,
             nativeKimi: { KimiNativeSession(access: "old-access", refresh: "old-refresh") }, allowRefresh: { true })
         _ = try await provider.fetch()
         _ = try await provider.fetch()
         let requests = await http.capturedRequests()
-        XCTAssertEqual(requests.count, 6)
+        XCTAssertEqual(requests.count, 8)
         XCTAssertEqual(requests[1].url.absoluteString, "https://www.kimi.ai/api/auth/token/refresh")
         XCTAssertEqual(requests[1].method, .get)
         XCTAssertEqual(requests[1].headers["Authorization"], "Bearer old-refresh")
@@ -48,8 +48,9 @@ final class ConsumerQuotaTests: XCTestCase {
         XCTAssertEqual(value.planName, "Free")
         XCTAssertEqual(value.windows.first?.kind, .totalUsage)
         XCTAssertEqual(value.windows.first?.usedPercent, 0)
-        XCTAssertThrowsError(try ConsumerQuotaProvider.kimi(subscription: subscription,
-            stats: httpResponse(json: #"{"subscriptionBalance":{"feature":"FEATURE_CODING","amountUsedRatio":0}}"#)))
+        let coding = try ConsumerQuotaProvider.kimi(subscription: subscription,
+            stats: httpResponse(json: #"{"subscriptionBalance":{"feature":"FEATURE_CODING","amountUsedRatio":0}}"#))
+        XCTAssertEqual(coding.windows.first?.kind.rawValue, "additional:kimi.membership.FEATURE_CODING")
         for invalid in ["true", "-1", "1.1", "null"] {
             XCTAssertThrowsError(try ConsumerQuotaProvider.kimi(subscription: subscription,
                 stats: httpResponse(json: "{\"subscriptionBalance\":{\"feature\":\"FEATURE_OMNI\",\"amountUsedRatio\":\(invalid)}}")))

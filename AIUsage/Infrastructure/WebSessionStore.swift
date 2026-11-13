@@ -36,7 +36,8 @@ struct WebSessionStore: Sendable {
             "claude.ai": ["sessionKey", "sessionKeyLC", "sessionKeyV3", "sessionKeyV3LC"],
             "chatgpt.com": ["__Secure-next-auth.session-token", "__Secure-next-auth.session-token.0", "__Secure-next-auth.session-token.1"],
             "cursor.com": ["WorkosCursorSessionToken"],
-            "manus.im": ["session_id"]]
+            "manus.im": ["session_id"],
+            "muse.ai": ["hatch_sess", "hatch_gw"]]
         guard !names.isEmpty, Set(names).isSubset(of: allowed[domain] ?? []),
               source != .claudeDesktop || domain == "claude.ai",
               source != .codexDesktop || domain == "chatgpt.com" else {
@@ -46,7 +47,7 @@ struct WebSessionStore: Sendable {
         guard let path = [base + "Cookies", base + "Network/Cookies"].first(where: files.exists) else {
             throw ProviderFailure(.authentication, "No session found in the selected app or browser.")
         }
-        let selectedAccess = domain == "manus.im" && source == .edge ? BrowserDatabaseAccess.start(path: path) : nil
+        let selectedAccess = ["manus.im", "muse.ai"].contains(domain) && source == .edge ? BrowserDatabaseAccess.start(path: path) : nil
         defer { selectedAccess?.stopAccessingSecurityScopedResource() }
         let nameList = names.map { "'\($0)'" }.joined(separator: ",")
         let sql = "SELECT json_group_array(json_object('name',name,'host',host_key,'value',value,'encrypted',hex(encrypted_value))) FROM cookies WHERE host_key IN ('\(domain)', '.\(domain)') AND name IN (\(nameList))"

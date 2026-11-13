@@ -41,13 +41,13 @@ actor CopilotProvider: UsageProvider {
                 } catch let failure as ProviderFailure {
                     throw failure
                 } catch {
-                    throw ProviderFailure(.transient, "GitHub Copilot could not be reached.")
+                    throw ProviderFailure(.transient, "GitHub could not be reached.")
                 }
 
                 if Self.isRateLimited(response) {
                     throw ProviderFailure(
                         .rateLimited,
-                        "GitHub Copilot is rate limited. Try again later.",
+                        "GitHub is rate limited. Try again later.",
                         retryAt: Self.retryDate(response, now: dateProvider.now())
                     )
                 }
@@ -66,11 +66,11 @@ actor CopilotProvider: UsageProvider {
         guard !seen.isEmpty else {
             throw ProviderFailure(
                 .authentication,
-                "Not logged in. Sign in to GitHub Copilot or run `gh auth login`."
+                "Not logged in. Sign in to GitHub or run `gh auth login`."
             )
         }
         throw ProviderFailure(.authentication, sawForbidden
-            ? "GitHub Copilot access denied. Check token permissions, subscription, or organization policy."
+            ? "GitHub access denied. Check token permissions, subscription, or organization policy."
             : "Saved GitHub credentials were rejected. Sign in to Copilot or run `gh auth login` again.")
     }
 

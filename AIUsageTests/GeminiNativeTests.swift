@@ -66,9 +66,15 @@ final class GeminiNativeTests: XCTestCase {
         XCTAssertEqual(result.credentialSource, "Gemini app")
         XCTAssertEqual(result.accountLabel, "demo@example.invalid")
         XCTAssertEqual(try XCTUnwrap(result.windows[0].resetsAt).timeIntervalSince1970, 1_800_005_000.123, accuracy: 0.00001)
-        XCTAssertNil(result.planName) // Native tier enum is deliberately not guessed.
+        XCTAssertEqual(result.planName, "Google AI Pro") // Native TIER1 mapping verified from installed schema.
     }
 
+    func testUnknownNativeTierIsNotLabeledAsPro() throws {
+        var body = try Self.data(usageHex)
+        body[1] = 99
+        let value = try GeminiNativeUsageMapper.map(response: HTTPResponse(statusCode: 200, headers: [:], body: body), now: now, accountLabel: nil)
+        XCTAssertNil(value.planName)
+    }
     func testMalformedOrMissingQuotaNeverBecomesFullAllowance() {
         for body in [Data(), Data([0xff]), Data([0x18, 0x01])] {
             XCTAssertThrowsError(try GeminiNativeUsageMapper.map(response: HTTPResponse(statusCode: 200, headers: [:], body: body), now: now, accountLabel: nil))
@@ -169,38 +175,7 @@ final class GeminiNativeTests: XCTestCase {
         XCTAssertEqual(requests.count, 1)
         let body = String(decoding: requests[0].body!, as: UTF8.self)
         XCTAssertTrue(body.contains("assistant"))
-        XCTAssertTrue(body.contains("cloud-platform"))
-    }
-
-    func testGeminiAndAntigravityUseSameSessionAndAccountWithoutOtherCredential() async throws {
-        let files = try nativeFiles()
-        let oauth = MockHTTPClient([httpResponse(json: #"{"access_token":"shared-token","expires_in":3600}"#)])
-        let session = GoogleAISession(authStore: try store(files: files), client: GeminiNativeUsageClient(http: oauth),
-                                      dateProvider: FixedDateProvider(value: now))
-        let geminiHTTP = MockHTTPClient([try usage()])
-        let gemini = GeminiNativeProvider(client: GeminiNativeUsageClient(http: geminiHTTP),
-            dateProvider: FixedDateProvider(value: now), session: session)
-        let buckets = ["gemini-5h", "gemini-weekly", "3p-5h", "3p-weekly"].map {
-            ["bucketId": $0, "remainingFraction": 0.5] as [String: Any]
-        }
-        let quota = HTTPResponse(statusCode: 200, headers: [:], body: try JSONSerialization.data(withJSONObject:
-            ["groups": [["displayName": "Quota", "buckets": buckets]]]))
-        let agHTTP = MockHTTPClient([httpResponse(json: #"{"paidTier":{"id":"g1-pro-tier"}}"#), quota])
-        let ag = GoogleAIAntigravityProvider(session: session, client: AntigravityUsageClient(http: agHTTP),
-                                            dateProvider: FixedDateProvider(value: now))
-        async let a = gemini.fetch()
-        async let b = ag.fetch()
-        let values = try await (a, b)
-        XCTAssertEqual(values.0.accountLabel, values.1.accountLabel)
-        XCTAssertEqual(values.1.accountLabel, "demo@example.invalid")
-        XCTAssertEqual(values.1.windows.count, 4)
-        XCTAssertEqual(GoogleAIGroup.sharedPlan([
-            ProviderState(provider: .gemini, snapshot: values.0), ProviderState(provider: .antigravity, snapshot: values.1)
-        ]), "Google AI Pro")
-        let refreshes = await oauth.capturedRequests()
-        XCTAssertEqual(refreshes.count, 1)
-        let requests = await agHTTP.capturedRequests()
-        XCTAssertTrue(requests.allSatisfy { $0.headers["Authorization"] == "Bearer shared-token" })
+        XCTAssertFalse(body.contains("cloud-platform"))
     }
 
     func testOldRejectionDoesNotDiscardNewlyRefreshedSharedToken() async throws {

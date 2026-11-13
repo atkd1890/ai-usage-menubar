@@ -60,20 +60,24 @@ enum CodexUsageMapper {
             now: now
         )
 
+        var details: [ProviderUsageDetail] = []
         if let entries = body["additional_rate_limits"] as? [Any] {
             for rawEntry in entries {
-                guard let entry = ProviderParsing.object(rawEntry), isSpark(entry),
-                      let rateLimit = ProviderParsing.object(entry["rate_limit"]) else {
+                guard let entry = ProviderParsing.object(rawEntry) else { continue }
+                guard let rateLimit = ProviderParsing.object(entry["rate_limit"]) else {
+                    if !(entry["rate_limit"] is NSNull) { details.append(QuotaDiscovery.notice("Codex additional limit")) }
                     continue
                 }
-                windows.append(contentsOf: classify(
-                    rateLimit: rateLimit,
-                    kinds: (.sparkSession, .sparkWeekly),
-                    headerPercents: (nil, nil),
-                    now: now
-                ))
-                break
+                if isSpark(entry) {
+                    windows += classify(rateLimit: rateLimit, kinds: (.sparkSession, .sparkWeekly), headerPercents: (nil, nil), now: now)
+                } else if let id = ProviderParsing.string(entry["metered_feature"]) ?? ProviderParsing.string(entry["limit_name"]) {
+                    windows += discoveredWindows(rateLimit, id: "codex." + id,
+                        title: ProviderParsing.string(entry["limit_name"]) ?? QuotaDiscovery.name(id), now: now, notices: &details)
+                } else { details.append(QuotaDiscovery.notice("Codex unnamed limit")) }
             }
+        }
+        if let review = ProviderParsing.object(body["code_review_rate_limit"]) {
+            windows += discoveredWindows(review, id: "codex.review", title: "Code Review", now: now, notices: &details)
         }
 
         return ProviderSnapshot(
@@ -89,8 +93,27 @@ enum CodexUsageMapper {
             ),
             fetchedAt: now,
             accountEmail: AccountEmail.validated(body["email"]),
-            usageScope: "Shared allowance · Codex & ChatGPT Work"
+            usageScope: "Shared allowance · Codex & ChatGPT Work",
+            usageDetails: details
         )
+    }
+
+    private static func discoveredWindows(_ source: [String: Any], id: String, title: String, now: Date,
+                                          notices: inout [ProviderUsageDetail]) -> [QuotaWindow] {
+        var result: [QuotaWindow] = []
+        for slot in ["primary_window", "secondary_window"] {
+            guard let raw = source[slot], !(raw is NSNull) else { continue }
+            guard let window = ProviderParsing.object(raw) else { notices.append(QuotaDiscovery.notice(id)); continue }
+            guard let rawPercent = window["used_percent"], !(rawPercent is NSNull) else { continue }
+            let seconds = QuotaDiscovery.number(window["limit_window_seconds"])
+            let cadence = seconds == 18000 ? "Session" : seconds == 604800 ? "Weekly" : seconds.map { "\($0.formatted()) seconds" } ?? "Quota"
+            let identifier = id + "." + (seconds.map { String($0) } ?? slot)
+            if let value = QuotaDiscovery.window(id: identifier, title: title + " · " + cadence,
+                used: QuotaDiscovery.number(rawPercent), reset: resetDate(window, now: now)) {
+                if !result.contains(where: { $0.kind == value.kind }) { result.append(value) }
+            } else { notices.append(QuotaDiscovery.notice(identifier)) }
+        }
+        return result
     }
 
     static func applicableResetDetails(_ body: [String: Any]) -> [ProviderUsageDetail] {

@@ -18,15 +18,21 @@ enum GeminiNativeUsageMapper {
         do { fields = try GeminiProtobuf.fields(response.body) }
         catch { throw GeminiUsageMapper.changedResponse }
         var quotas: [QuotaKind: QuotaWindow] = [:]
+        var notices: [ProviderUsageDetail] = []
         for field in fields where field.number == 3 {
             guard let bytes = field.bytes, let pool = try? GeminiProtobuf.fields(bytes),
-                  let type = pool.first(where: { $0.number == 1 })?.integer,
-                  let gxuData = pool.first(where: { $0.number == 2 })?.bytes,
+                  let type = pool.first(where: { $0.number == 1 })?.integer else { continue }
+            guard let gxuData = pool.first(where: { $0.number == 2 })?.bytes,
                   let gxu = try? GeminiProtobuf.fields(gxuData),
                   let used = gxu.first(where: { $0.number == 2 })?.floating,
-                  used.isFinite, used >= 0 else { continue }
+                  used.isFinite, used >= 0 else {
+                if pool.contains(where: { $0.number > 1 && $0.bytes?.isEmpty == false }) {
+                    notices.append(QuotaDiscovery.notice("Gemini pool \(type)"))
+                }
+                continue
+            }
             let kind: QuotaKind
-            switch type { case 1: kind = .session; case 2: kind = .weekly; default: continue }
+            switch type { case 1: kind = .session; case 2: kind = .weekly; default: kind = .additional(id: "gemini.pool.\(type)", title: "Gemini · Quota \(type)") }
             var reset: Date?
             if let timestamp = gxu.first(where: { $0.number == 1 })?.bytes,
                let time = try? GeminiProtobuf.fields(timestamp),
@@ -39,9 +45,13 @@ enum GeminiNativeUsageMapper {
             // Do not combine duplicate pool records or invent missing percentages.
             if quotas[kind] == nil { quotas[kind] = QuotaWindow(kind: kind, usedPercent: used * 100, resetsAt: reset) }
         }
-        let windows = [QuotaKind.session, .weekly].compactMap { quotas[$0] }
+        let windows = [QuotaKind.session, .weekly].compactMap { quotas[$0] } + quotas.keys
+            .filter { $0 != .session && $0 != .weekly }.sorted { $0.rawValue < $1.rawValue }.compactMap { quotas[$0] }
         guard !windows.isEmpty else { throw GeminiUsageMapper.changedResponse }
-        return ProviderSnapshot(provider: .gemini, planName: nil, windows: windows, fetchedAt: now,
-            credentialSource: "Gemini app", accountLabel: accountLabel)
+        // Installed Gemini's SwiftProtobuf name map identifies user_tier=2 as
+        // TIER1, the verified Pro tier. Unknown values stay unlabeled.
+        let plan = fields.first(where: { $0.number == 2 })?.integer == 2 ? "Google AI Pro" : nil
+        return ProviderSnapshot(provider: .gemini, planName: plan, windows: windows, fetchedAt: now,
+            credentialSource: "Gemini app", accountLabel: accountLabel, usageDetails: notices)
     }
 }

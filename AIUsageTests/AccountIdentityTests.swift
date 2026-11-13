@@ -71,15 +71,13 @@ final class AccountIdentityTests: XCTestCase {
         let snapshot = try CodexUsageMapper.map(response: httpResponse(json: #"{"email":"codex@example.com","plan_type":"plus","rate_limit":{"primary_window":{"used_percent":20,"limit_window_seconds":18000,"reset_after_seconds":1000}}}"#), now: Date())
         XCTAssertEqual(snapshot.identityEmail, "codex@example.com")
     }
-    func testGoogleSharedEmailRequiresMatchingAccounts() {
-        func state(_ provider: ProviderID, _ email: String) -> ProviderState {
-            ProviderState(provider: provider, snapshot: ProviderSnapshot(provider: provider, planName: "Pro", windows: [],
-                fetchedAt: Date(), accountEmail: email))
-        }
-        XCTAssertEqual(GoogleAIGroup.sharedEmail([state(.gemini,"one@example.com"),state(.antigravity,"one@example.com")]), "one@example.com")
-        XCTAssertNil(GoogleAIGroup.sharedEmail([state(.gemini,"one@example.com"),state(.antigravity,"other@example.com")]))
-        XCTAssertEqual(GoogleAIGroup.sharedEmail([state(.gemini,"browser@example.com")]), "browser@example.com")
+    func testGoogleProviderEmailsAreIndependent() {
+        let gemini = ProviderSnapshot(provider: .gemini, planName: "Pro", windows: [], fetchedAt: Date(), accountEmail: "gemini@example.com")
+        let ag = ProviderSnapshot(provider: .antigravity, planName: "Pro", windows: [], fetchedAt: Date(), accountEmail: "ide@example.com")
+        XCTAssertEqual(gemini.identityEmail, "gemini@example.com")
+        XCTAssertEqual(ag.identityEmail, "ide@example.com")
     }
+
 }
 private actor IdentityCounter {
     private(set) var count = 0

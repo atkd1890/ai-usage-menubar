@@ -25,27 +25,24 @@ struct UsageDashboardView: View {
     private var start: Date { Calendar.current.date(byAdding: .day, value: -(days - 1), to: today)! }
     private var end: Date { Calendar.current.date(byAdding: .day, value: 1, to: today)! }
     private var providers: [ProviderID] {
-        GoogleAIGroup.ordered(preferences.providerOrder.filter { store.trackedProviderIDs.contains($0) && ProviderID.enabledCases.contains($0) })
+        preferences.providerOrder.filter { store.trackedProviderIDs.contains($0) && ProviderID.enabledCases.contains($0) }
     }
-    private var sidebarProviders: [ProviderID] {
-        let google = providers.first { GoogleAIGroup.members.contains($0) }
-        return providers.filter { !GoogleAIGroup.members.contains($0) || $0 == google }
-    }
+    private var sidebarProviders: [ProviderID] { providers }
     private var selected: ProviderID? { ProviderID(rawValue: selection) }
     private var selectedProviders: [ProviderID] {
         guard let selected else { return providers }
-        return GoogleAIGroup.members.contains(selected) ? providers.filter { GoogleAIGroup.members.contains($0) } : [selected]
+        return [selected]
     }
     private var planProviders: [ProviderID] { sidebarProviders.filter { selectedProviders.contains($0) } }
     private func name(_ provider: ProviderID) -> String {
-        GoogleAIGroup.members.contains(provider) ? "Google AI" : store.states[provider]?.snapshot?.displayName ?? provider.displayName
+        store.states[provider]?.snapshot?.displayName ?? provider.displayName
     }
     private func leafName(_ provider: ProviderID) -> String { provider == .gemini ? "Gemini" : provider == .antigravity ? "Antigravity" : name(provider) }
     private var title: String { selected.map(name) ?? "Overview" }
     private var names: [ProviderID: String] { Dictionary(uniqueKeysWithValues: providers.map { ($0, name($0)) }) }
     private var accounts: [ProviderID: String] {
         Dictionary(uniqueKeysWithValues: providers.compactMap { provider in
-            guard let snapshot = store.states[provider]?.snapshot, let email = snapshot.identityEmail else { return nil }
+            guard let snapshot = store.states[provider]?.snapshot, let email = snapshot.historyIdentity else { return nil }
             return (provider, "\(snapshot.credentialSource ?? "selected")|\(email)")
         })
     }
@@ -210,6 +207,10 @@ struct UsageDashboardView: View {
             Divider()
             VStack(alignment: .leading, spacing: 12) {
                 sidebarTitle("Limits", symbol: "exclamationmark.circle.fill", tint: .red)
+                if providers.contains(where: { !(store.states[$0]?.snapshot?.quotaCompatibilityNotes.isEmpty ?? true) }) {
+                    Text("Some quota data is unsupported. Check the provider in Settings.")
+                        .font(.caption).foregroundStyle(.orange)
+                }
                 Text("\(data.hitCount) observed hits").font(.system(size: 27, weight: .semibold))
                 ForEach(data.limits) { row in
                     HStack(alignment: .firstTextBaseline) {
@@ -252,23 +253,13 @@ struct UsageDashboardView: View {
     }
     private func providerAmount(_ provider: ProviderID, sidebar: Bool = false) -> AnalyticsAmount {
         let amounts = sidebar ? data.sidebarProviders : data.providers
-        if !GoogleAIGroup.members.contains(provider) { return amounts[provider] ?? AnalyticsAmount() }
-        var result = AnalyticsAmount()
-        for member in GoogleAIGroup.members {
-            let amount = amounts[member] ?? AnalyticsAmount()
-            result.tokens += amount.tokens; result.value += amount.value
-            result.records += amount.records; result.pricedRecords += amount.pricedRecords
-        }
-        return result
+        return amounts[provider] ?? AnalyticsAmount()
     }
     private func planName(_ provider: ProviderID) -> String? {
-        if GoogleAIGroup.members.contains(provider) {
-            return GoogleAIGroup.sharedPlan(selectedProviders.filter { GoogleAIGroup.members.contains($0) }.compactMap { store.states[$0] })
-        }
-        return store.states[provider]?.snapshot?.planName
+        store.states[provider]?.snapshot?.planName
     }
     private func priceKey(_ provider: ProviderID) -> String {
-        "analytics.planPrice.\(GoogleAIGroup.members.contains(provider) ? ProviderID.gemini.rawValue : provider.rawValue)"
+        "analytics.planPrice.\(provider.rawValue)"
     }
     private func price(_ provider: ProviderID) -> DashboardPlanPrice? {
         _ = priceRevision
@@ -285,7 +276,12 @@ struct UsageDashboardView: View {
                     HStack {
                         ProviderIcon(provider: provider, size: 14)
                         Text(name(provider)).font(.caption.weight(.medium))
-                        if let plan = planName(provider) { Text(plan.replacingOccurrences(of: "Google AI ", with: "")).font(.caption).foregroundStyle(.secondary) }
+                        if let plan = planName(provider) {
+                            let formattedPlan = [ProviderID.gemini, .antigravity].contains(provider)
+                                ? plan.replacingOccurrences(of: "Google AI ", with: "")
+                                : (provider == .muse ? plan.replacingOccurrences(of: "muse", with: "", options: .caseInsensitive).trimmingCharacters(in: .whitespaces) : plan)
+                            Text(formattedPlan.isEmpty ? plan : formattedPlan).font(.caption).foregroundStyle(.secondary)
+                        }
                         Spacer(minLength: 3)
                         Text(amount.pricedRecords > 0 ? amount.value.formatted(.currency(code: "USD").precision(.fractionLength(0...2))) : "—").font(.caption)
                     }

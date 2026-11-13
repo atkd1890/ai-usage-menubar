@@ -89,18 +89,17 @@ final class WebUsageProviderTests: XCTestCase {
         XCTAssertEqual(requests.count, 1)
     }
     @MainActor
-    func testGeminiOnlyMethodNeverFetchesOrDisplaysAntigravity() async {
+    func testGoogleProvidersFetchIndependently() async {
         let gemini = CountedSource(id: .gemini)
         let antigravity = CountedSource(id: .antigravity)
         let store = UsageStore(providers: [gemini, antigravity],
-            availabilityChecker: FixedProviderAvailabilityChecker(installed: [.gemini,.antigravity]),
-            loginMethod: { _ in .edge })
+            availabilityChecker: FixedProviderAvailabilityChecker(installed: [.gemini,.antigravity]))
         await store.refresh()
         let counts = await [gemini.count, antigravity.count]
-        XCTAssertEqual(counts, [1,0])
+        XCTAssertEqual(counts, [1,1])
         XCTAssertTrue(store.isProviderVisibleInDashboard(.gemini))
-        XCTAssertFalse(store.isProviderVisibleInDashboard(.antigravity))
-        XCTAssertTrue(store.availableMenuBarItems(for: .antigravity).isEmpty)
+        XCTAssertTrue(store.isProviderVisibleInDashboard(.antigravity))
+        XCTAssertNotNil(store.states[.antigravity]?.snapshot)
         XCTAssertFalse(store.states[.antigravity]?.isRefreshing == true)
         store.stop()
     }

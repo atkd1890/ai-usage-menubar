@@ -42,7 +42,9 @@ actor ConsumerQuotaProvider: UsageProvider {
             if stats.statusCode == 401 && attempt == 0 {
                 session = try await refreshed(session, fingerprint: fingerprint); continue
             }
-            return try Self.kimi(subscription: subscription, stats: stats)
+            let code = try? await request("https://www.kimi.ai/apiv2/kimi.gateway.billing.v1.BillingService/GetUsages", token: session.access,
+                payload: Data(#"{"scope":["FEATURE_CODING"]}"#.utf8))
+            return try Self.kimi(subscription: subscription, stats: stats, code: code ?? HTTPResponse(statusCode: 503, headers: [:], body: Data()))
         }
         throw ProviderFailure(.authentication, "Kimi session expired. Sign in to Kimi desktop again.")
     }
@@ -72,7 +74,7 @@ actor ConsumerQuotaProvider: UsageProvider {
         kimiCache = (fingerprint, updated) // RAM only; native storage is never modified.
         return updated
     }
-    private func request(_ endpoint: String, token: String) async throws -> HTTPResponse {
+    private func request(_ endpoint: String, token: String, payload: Data = Data("{}".utf8)) async throws -> HTTPResponse {
         guard !token.isEmpty, !token.contains(where: { $0.isWhitespace || $0 == ";" }) else {
             throw ProviderFailure(.authentication, "Invalid selected session.")
         }
@@ -85,7 +87,7 @@ actor ConsumerQuotaProvider: UsageProvider {
             headers["Referer"] = "https://www.kimi.ai/code/console"
             headers["Cookie"] = "kimi-auth=" + token
         }
-        return try await http.send(HTTPRequest(method: .post, url: URL(string: endpoint)!, headers: headers, body: Data("{}".utf8)))
+        return try await http.send(HTTPRequest(method: .post, url: URL(string: endpoint)!, headers: headers, body: payload))
     }
     private static func body(_ response: HTTPResponse) throws -> [String: Any] {
         guard response.statusCode == 200 else {
@@ -112,25 +114,68 @@ actor ConsumerQuotaProvider: UsageProvider {
     static func manus(_ response: HTTPResponse) throws -> ProviderSnapshot {
         let root = try body(response)
         let data = (root["data"] ?? root["result"] ?? root["response"] ?? root["availableCredits"]) as? [String: Any] ?? root
-        guard let maximum = number(data["maxRefreshCredits"]), maximum > 0,
-              let remaining = number(data["refreshCredits"]), remaining >= 0, remaining <= maximum else {
-            throw ProviderFailure(.invalidResponse, "Manus returned no bounded daily quota.")
+        var windows: [QuotaWindow] = []
+        if let maximum = number(data["maxRefreshCredits"]), maximum > 0,
+           let remaining = number(data["refreshCredits"]), (0...maximum).contains(remaining) {
+            windows.append(QuotaWindow(kind: .daily, usedPercent: (maximum - remaining) / maximum * 100,
+                resetsAt: date(data["nextRefreshTime"])))
         }
-        return ProviderSnapshot(provider: .manus, planName: nil,
-            windows: [QuotaWindow(kind: .daily, usedPercent: (maximum - remaining) / maximum * 100, resetsAt: date(data["nextRefreshTime"]))],
-            fetchedAt: Date(), credentialSource: "Edge Default", usageScope: "Daily allowance • Manus")
+        if let maximum = number(data["proMonthlyCredits"]), maximum > 0,
+           let remaining = number(data["periodicCredits"]), (0...maximum).contains(remaining) {
+            windows.append(QuotaWindow(kind: .additional(id: "manus.monthly", title: "Monthly"),
+                usedPercent: (maximum - remaining) / maximum * 100, resetsAt: nil))
+        }
+        guard !windows.isEmpty else { throw ProviderFailure(.invalidResponse, "Manus returned no bounded quota.") }
+        return ProviderSnapshot(provider: .manus, planName: nil, windows: windows,
+            fetchedAt: Date(), credentialSource: "Edge Default", usageScope: "Account allowance • Manus")
     }
-    static func kimi(subscription: HTTPResponse, stats: HTTPResponse) throws -> ProviderSnapshot {
+    static func kimi(subscription: HTTPResponse, stats: HTTPResponse, code: HTTPResponse? = nil) throws -> ProviderSnapshot {
         let account = try body(subscription), usage = try body(stats)
-        guard let balance = usage["subscriptionBalance"] as? [String: Any],
-              balance["feature"] as? String == "FEATURE_OMNI",
-              let ratio = number(balance["amountUsedRatio"]), (0...1).contains(ratio) else {
-            throw ProviderFailure(.invalidResponse, "Kimi returned no membership usage ratio.")
+        var windows: [QuotaWindow] = []
+        var notices: [ProviderUsageDetail] = []
+        var balances = usage["balances"] as? [[String: Any]] ?? []
+        if let primary = usage["subscriptionBalance"] as? [String: Any] { balances.insert(primary, at: 0) }
+        for balance in balances {
+            guard let feature = balance["feature"] as? String else { continue }
+            guard let raw = balance["amountUsedRatio"], !(raw is NSNull) else { continue }
+            let kind: QuotaKind = feature == "FEATURE_OMNI" ? .totalUsage : .additional(id: "kimi.membership." + feature,
+                title: QuotaDiscovery.name(feature.replacingOccurrences(of: "FEATURE_", with: "")))
+            if let ratio = number(raw), (0...1).contains(ratio) {
+                if !windows.contains(where: { $0.kind == kind }) {
+                    windows.append(QuotaWindow(kind: kind, usedPercent: ratio * 100, resetsAt: date(balance["expireTime"])))
+                }
+            } else { notices.append(QuotaDiscovery.notice(feature)) }
         }
+        if let code {
+            if let value = try? body(code) {
+                for row in value["usages"] as? [[String: Any]] ?? [] {
+                    guard let scope = row["scope"] as? String else { continue }
+                    let name = QuotaDiscovery.name(scope.replacingOccurrences(of: "FEATURE_", with: ""))
+                    var entries: [(String, String, [String: Any])] = []
+                    if let detail = row["detail"] as? [String: Any] { entries.append(("total", name + " quota", detail)) }
+                    for limit in row["limits"] as? [[String: Any]] ?? [] {
+                        guard let window = limit["window"] as? [String: Any], let duration = number(window["duration"]),
+                              let unit = window["timeUnit"] as? String, let detail = limit["detail"] as? [String: Any] else { continue }
+                        entries.append(("\(duration).\(unit)", name + " · \(duration.formatted()) " + unit.replacingOccurrences(of: "TIME_UNIT_", with: "").lowercased(), detail))
+                    }
+                    for (suffix, title, detail) in entries {
+                        let id = "kimi.code." + scope + "." + suffix
+                        if let maximum = number(detail["limit"]), maximum > 0,
+                           let remaining = number(detail["remaining"]), (0...maximum).contains(remaining) {
+                            let kind = QuotaKind.additional(id: id, title: title)
+                            if !windows.contains(where: { $0.kind == kind }) {
+                                windows.append(QuotaWindow(kind: kind, usedPercent: (maximum - remaining) / maximum * 100,
+                                    resetsAt: date(detail["resetTime"])))
+                            }
+                        } else if detail["limit"] != nil && !(detail["limit"] is NSNull) { notices.append(QuotaDiscovery.notice(id)) }
+                    }
+                }
+            } else { notices.append(QuotaDiscovery.notice("Kimi Code")) }
+        }
+        guard !windows.isEmpty else { throw ProviderFailure(.invalidResponse, "Kimi returned no bounded usage.") }
         let sub = account["subscription"] as? [String: Any]
         let goods = sub?["goods"] as? [String: Any]
-        return ProviderSnapshot(provider: .kimi, planName: goods?["title"] as? String,
-            windows: [QuotaWindow(kind: .totalUsage, usedPercent: ratio * 100, resetsAt: date(balance["expireTime"]))],
-            fetchedAt: Date(), credentialSource: "Kimi desktop", usageScope: "Membership usage • Kimi")
+        return ProviderSnapshot(provider: .kimi, planName: goods?["title"] as? String, windows: windows,
+            fetchedAt: Date(), credentialSource: "Kimi desktop", usageScope: "Membership usage • Kimi", usageDetails: notices)
     }
 }

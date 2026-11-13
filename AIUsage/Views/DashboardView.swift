@@ -202,10 +202,7 @@ struct DashboardContentView: View {
                         .padding(.vertical, 4)
                         .accessibilityHidden(true)
                 }
-                if GoogleAIGroup.members.contains(provider) {
-                        GoogleAISectionView(states: googleProviders.compactMap { store.states[$0] },
-                                            displayMode: usageDisplayMode)
-                } else if let state = store.states[provider] {
+                if let state = store.states[provider] {
                     ProviderSectionView(
                         state: state,
                         displayMode: usageDisplayMode
@@ -215,19 +212,8 @@ struct DashboardContentView: View {
         }
     }
 
-    // Google AI is one top-level provider group; its child divider remains inset.
     private var topLevelProviders: [ProviderID] {
-        visibleProviders.filter {
-            !GoogleAIGroup.members.contains($0) || $0 == googleProviders.first
-        }
-    }
-
-    private var visibleProviders: [ProviderID] {
-        GoogleAIGroup.ordered(providerOrder.filter(store.isProviderVisibleInDashboard))
-    }
-
-    private var googleProviders: [ProviderID] {
-        visibleProviders.filter { GoogleAIGroup.members.contains($0) }
+        providerOrder.filter(store.isProviderVisibleInDashboard)
     }
 
     var header: some View {

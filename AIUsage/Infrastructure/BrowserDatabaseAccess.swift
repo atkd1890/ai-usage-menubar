@@ -7,10 +7,10 @@ enum BrowserDatabaseAccess {
     static var expectedURL: URL {
         URL(fileURLWithPath: expandHome("~/Library/Application Support/Microsoft Edge/Default/Cookies"))
     }
-    @MainActor static func request() -> Bool {
+    @MainActor static func request(providerName: String = "Manus") -> Bool {
         let panel = NSOpenPanel()
-        panel.title = "Allow Manus login access"
-        panel.message = "Select Edge Default's Cookies file. AI Usage reads only the Manus session cookie."
+        panel.title = "Allow \(providerName) login access"
+        panel.message = "Select Edge Default's Cookies file. AI Usage reads only the approved \(providerName) session cookies."
         panel.prompt = "Allow Read Access"
         panel.canChooseDirectories = false
         panel.canChooseFiles = true

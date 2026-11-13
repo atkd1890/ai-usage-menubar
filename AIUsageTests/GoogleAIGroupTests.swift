@@ -2,50 +2,36 @@ import XCTest
 @testable import AIUsage
 
 final class GoogleAIGroupTests: XCTestCase {
-    func testGroupingAnchorsAtFirstGoogleProductWithoutDuplicatingChildren() {
-        let input: [ProviderID] = [.claude, .antigravity, .cursor, .copilot, .gemini, .codex]
-        XCTAssertEqual(GoogleAIGroup.ordered(input), [.claude, .antigravity, .gemini, .cursor, .copilot, .codex])
-        XCTAssertEqual(Set(GoogleAIGroup.ordered(input)), Set(input))
-        XCTAssertEqual(GoogleAIGroup.ordered([.gemini, .cursor]), [.gemini, .cursor])
-        XCTAssertEqual(GoogleAIGroup.ordered([.cursor, .antigravity]), [.cursor, .antigravity])
-        XCTAssertEqual(GoogleAIGroup.ordered([]), [])
-    }
     private func state(_ provider: ProviderID, account: String?, plan: String? = "Google AI Pro") -> ProviderState {
         ProviderState(provider: provider, snapshot: ProviderSnapshot(provider: provider, planName: plan,
             windows: [QuotaWindow(kind: .weekly, usedPercent: provider == .gemini ? 10 : 50, resetsAt: nil)],
             fetchedAt: Date(), accountLabel: account))
     }
-    func testEqualPlanNamesWithoutAccountEvidenceDoNotBecomeSharedPlan() {
-        XCTAssertNil(GoogleAIGroup.sharedPlan([state(.gemini, account: "one@example.test"), state(.antigravity, account: nil)]))
-        XCTAssertNil(GoogleAIGroup.sharedPlan([state(.gemini, account: "one@example.test"), state(.antigravity, account: "two@example.test")]))
-        XCTAssertEqual(GoogleAIGroup.sharedPlan([state(.gemini, account: "one@example.test")]), "Google AI Pro")
-    }
-    func testOnlyMatchingAccountAndPlanCanUseSharedBadge() {
-        XCTAssertEqual(GoogleAIGroup.sharedPlan([state(.gemini, account: "One@example.test"), state(.antigravity, account: "one@example.test")]), "Google AI Pro")
-        XCTAssertNil(GoogleAIGroup.sharedPlan([state(.gemini, account: "one@example.test"), state(.antigravity, account: "one@example.test", plan: "Google AI Ultra")]))
-    }
-    @MainActor
-    func testMasterSettingsSwitchesAndProductSpecificCheckboxes() {
-        let suite = "GoogleGroupTests." + UUID().uuidString
+    @MainActor func testGoogleProvidersKeepIndependentSettings() {
+        let suite = "GoogleSplit." + UUID().uuidString
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let preferences = AppPreferences(defaults: defaults)
-        let gemini = MenuBarItemID(provider: .gemini, metric: .weekly)
-        let ag = MenuBarItemID(provider: .antigravity, metric: .weekly)
-        preferences.setGoogleAITracking(true)
-        preferences.setGoogleAIMenuBarVisibility(true, availableItems: [gemini, ag])
-        XCTAssertTrue(preferences.isProviderShownInMenuBar(.gemini))
-        XCTAssertTrue(preferences.isProviderShownInMenuBar(.antigravity))
-        preferences.setMenuBarMetric(false, item: gemini, availableItems: [gemini])
-        XCTAssertTrue(preferences.isMenuBarMetricSelected(ag))
-        XCTAssertFalse(preferences.isMenuBarMetricSelected(gemini))
-        preferences.setGoogleAITracking(false)
-        XCTAssertFalse(preferences.isTracking(.gemini))
-        XCTAssertFalse(preferences.isTracking(.antigravity))
-        XCTAssertFalse(preferences.isProviderShownInMenuBar(.antigravity))
-        XCTAssertTrue(preferences.isMenuBarMetricSelected(ag))
+        preferences.setTracking(false, for: .gemini)
+        XCTAssertTrue(preferences.isTracking(.antigravity))
+        preferences.setTracking(true, for: .gemini)
+        preferences.setTracking(false, for: .antigravity)
+        XCTAssertTrue(preferences.isTracking(.gemini))
+        preferences.setLoginMethod(.chrome, for: .gemini)
+        XCTAssertEqual(preferences.loginMethod(for: .antigravity), .desktop)
+        XCTAssertEqual(ProviderLoginMethod.supported(for: .antigravity), [.desktop])
+        XCTAssertNotEqual(ProviderLoginMethod.selectionKey(for: .gemini), ProviderLoginMethod.selectionKey(for: .antigravity))
     }
-
+    func testDashboardSelectionDoesNotIncludeOtherGoogleProvider() {
+        let now = Date()
+        let hits = [ProviderID.gemini, .antigravity].map {
+            UsageLimitHit(id: $0.rawValue, provider: $0, account: "test", date: now, metric: .weekly, reset: nil)
+        }
+        let projection = DashboardProjection.build(events: [], hits: hits, providers: [.gemini, .antigravity],
+            selected: .antigravity, days: 30, now: now, names: [:], accounts: [.gemini: "test", .antigravity: "test"])
+        XCTAssertEqual(projection.hitCount, 1)
+        XCTAssertEqual(projection.limits.first?.provider, .antigravity)
+    }
     @MainActor
     func testOneProductFailureKeepsOtherQuotaAndMetricIdentity() async {
         let good = state(.gemini, account: "one@example.test").snapshot!

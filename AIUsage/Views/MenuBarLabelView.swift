@@ -7,7 +7,7 @@ struct MenuBarPresentation: Equatable, Sendable {
 
     init(reading: MenuBarReading) {
         let provider = reading.isXSubscription ? "X Subscription"
-            : (GoogleAIGroup.members.contains(reading.provider) ? "Google AI · " + reading.provider.displayName : reading.provider.displayName)
+            : reading.provider.displayName
         let subject = "\(provider) \(reading.metric.title)"
         switch reading.value {
         case .percentage(let percent):

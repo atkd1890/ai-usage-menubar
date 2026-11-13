@@ -27,7 +27,7 @@ enum GeminiUsageMapper {
               let usage = rpcs["getUsageInfo"] as? [String: Any],
               let pools = usage["pools"] as? [[String: Any]] else { throw changedResponse }
         let definitions: [(String, QuotaKind)] = [("GXU_FIVE_HOURLY", .session), ("GXU_WEEKLY", .weekly)]
-        let windows = definitions.compactMap { type, kind -> QuotaWindow? in
+        var windows = definitions.compactMap { type, kind -> QuotaWindow? in
             guard let pool = pools.first(where: { $0["poolType"] as? String == type }),
                   let fraction = ProviderParsing.double(pool["percentageUsed"]),
                   fraction.isFinite, fraction >= 0 else { return nil }
@@ -35,12 +35,22 @@ enum GeminiUsageMapper {
             return QuotaWindow(kind: kind, usedPercent: fraction * 100,
                 resetsAt: ProviderParsing.date(gxu?["windowRefreshesAt"]))
         }
+        var notices: [ProviderUsageDetail] = []
+        for pool in pools {
+            guard let type = pool["poolType"] as? String, !definitions.contains(where: { $0.0 == type }) else { continue }
+            guard !(pool["percentageUsed"] is NSNull) else { continue }
+            let ratio = QuotaDiscovery.number(pool["percentageUsed"])
+            if let window = QuotaDiscovery.window(id: "gemini.pool." + type, title: QuotaDiscovery.name(type),
+                used: ratio.map { $0 * 100 }, reset: ProviderParsing.date((pool["gxu"] as? [String: Any])?["windowRefreshesAt"])) {
+                if !windows.contains(where: { $0.kind == window.kind }) { windows.append(window) }
+            } else { notices.append(QuotaDiscovery.notice(type)) }
+        }
         guard !windows.isEmpty else {
             throw ProviderFailure(.invalidResponse, "This Google account reports no Gemini web usage windows.")
         }
         // Only this tier's meaning is verified; do not invent a plan for unknown enums.
         let plan = usage["subscriptionTier"] as? String == "TIER1" ? "Google AI Pro" : nil
-        return ProviderSnapshot(provider: .gemini, planName: plan, windows: windows, fetchedAt: now, credentialSource: sourceLabel)
+        return ProviderSnapshot(provider: .gemini, planName: plan, windows: windows, fetchedAt: now, credentialSource: sourceLabel, usageDetails: notices)
     }
     static var changedResponse: ProviderFailure {
         ProviderFailure(.invalidResponse, "Gemini web usage response changed. Update AI Usage.")

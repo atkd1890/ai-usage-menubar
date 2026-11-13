@@ -61,7 +61,7 @@ nonisolated struct DashboardProjection: Sendable {
         let allowed = Set(allowed)
         let selection: Set<ProviderID>
         if let selected {
-            selection = GoogleAIGroup.members.contains(selected) ? Set(GoogleAIGroup.members).intersection(allowed) : [selected]
+            selection = Set([selected]).intersection(allowed)
         } else { selection = allowed }
         var result = DashboardProjection(), bars: [String: AnalyticsBar] = [:]
         for event in events where allowed.contains(event.provider) {

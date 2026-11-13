@@ -75,6 +75,29 @@ enum ClaudeUsageMapper {
         appendWindow(body["seven_day"], kind: .weekly, to: &windows)
         appendWindow(body["seven_day_sonnet"], kind: .sonnet, to: &windows)
         appendFable(body["limits"], to: &windows)
+        var notices: [ProviderUsageDetail] = []
+        for key in body.keys.sorted() where key.hasPrefix("seven_day_") && key != "seven_day_sonnet" {
+            guard let quota = ProviderParsing.object(body[key]), quota["utilization"] != nil else { continue }
+            if let window = QuotaDiscovery.window(id: "claude." + key,
+                title: QuotaDiscovery.name(String(key.dropFirst(10))) + " · Weekly",
+                used: QuotaDiscovery.number(quota["utilization"]), reset: ProviderParsing.date(quota["resets_at"])) {
+                windows.append(window)
+            } else { notices.append(QuotaDiscovery.notice(key)) }
+        }
+        for limit in ProviderParsing.array(body["limits"]) {
+            guard limit["is_active"] as? Bool != false,
+                  let scope = ProviderParsing.object(limit["scope"]) else { continue }
+            let model = ProviderParsing.object(scope["model"])
+            let surface = ProviderParsing.object(scope["surface"])
+            guard let name = ProviderParsing.string(model?["display_name"]) ?? ProviderParsing.string(surface?["display_name"]),
+                  name != "Fable" else { continue }
+            let cadence = ProviderParsing.string(limit["kind"]) ?? "scoped"
+            let id = "claude.scoped." + cadence + "." + name
+            if let window = QuotaDiscovery.window(id: id, title: name + " · " + QuotaDiscovery.name(cadence),
+                used: QuotaDiscovery.number(limit["percent"]), reset: ProviderParsing.date(limit["resets_at"])) {
+                if !windows.contains(where: { $0.kind == window.kind }) { windows.append(window) }
+            } else { notices.append(QuotaDiscovery.notice(id)) }
+        }
 
         let spend = ProviderParsing.object(body["spend"])
         let enabled = spend?["enabled"] as? Bool ?? ProviderParsing.object(body["extra_usage"])?["is_enabled"] as? Bool
@@ -86,6 +109,7 @@ enum ClaudeUsageMapper {
             resets: resets,
             fetchedAt: now,
             usageScope: "Shared account limits · Claude Chat & Code",
+            usageDetails: notices,
             prepaidBalance: money(spend?["balance"]),
             additionalUsageEnabled: enabled,
             usageBreakdown: consumptionBreakdown(body, now: now)

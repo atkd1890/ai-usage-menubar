@@ -899,11 +899,7 @@ struct NativeProviderContent: View {
     let toggle: () -> Void
     var body: some View {
         Group {
-            if GoogleAIGroup.members.contains(provider) {
-                GoogleAISectionView(states: GoogleAIGroup.ordered(preferences.providerOrder.filter(store.isProviderVisibleInDashboard))
-                    .filter { GoogleAIGroup.members.contains($0) }.compactMap { store.states[$0] },
-                    displayMode: preferences.usageDisplayMode, part: part, expandedOverride: part == .details ? true : expanded, onToggle: toggle)
-            } else if let state = store.states[provider] {
+            if let state = store.states[provider] {
                 ProviderSectionView(state: state, displayMode: preferences.usageDisplayMode,
                                     expandedOverride: part == .details ? true : expanded, part: part, onToggle: toggle)
             }
@@ -979,9 +975,7 @@ final class DashboardPanelView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     private func synchronizeProviders() {
-        let visible = GoogleAIGroup.ordered(root.preferences.providerOrder.filter(root.store.isProviderVisibleInDashboard))
-        let firstGoogle = visible.first { GoogleAIGroup.members.contains($0) }
-        let ids = visible.filter { !GoogleAIGroup.members.contains($0) || $0 == firstGoogle }
+        let ids = root.preferences.providerOrder.filter(root.store.isProviderVisibleInDashboard)
         guard ids != providerIDs else { return }
         providerIDs = ids
         for view in providerStack.arrangedSubviews {

@@ -670,3 +670,26 @@ Opening Settings promotes the app to regular activation policy (Dock and Cmd-Tab
 ### Collapsed provider cards (2026-11-12)
 
 Cards start collapsed and show only the first quota-grid row. The disclosure chevron is immediately to the right of the provider name; the name and chevron toggle together without animation. Expanding restores secondary quota rows, consumption share, billing and reset inventory. A card without additional details has no meaningless disclosure control. Google AI expands as one group; collapsed it shows only its first displayed product's primary quota row, while expanded it shows all available Google products. Cached SwiftUI state preserves user choices during the running app session; expansion does not trigger usage fetches. Natural-height invalidation resizes the existing native panel and its NSScrollView viewport.
+
+
+### Argon quota discovery correction (2026-11-13)
+
+`retrieveUserQuotaSummary` must use `antigravity/hub/<version>` with an Argon-capable compatibility version (minimum 2.26.0; prefer the installed Antigravity app version). The previous bare `antigravity/2.24.0` identity returned ordinary Gemini and Claude/GPT pools but omitted the independent `Gemini 4 Argon` weekly group. A successful four-pool response therefore does not prove completeness: try the second host when Argon is absent. Never interpret ordinary Gemini quota as Argon availability.
+
+The mapper keeps `gemini-argon-wtu-weekly` separate, preserves its actual reset and retains hundredth-percent precision. The panel gives Argon Weekly its own row, keeping the 3rd-party session/weekly pair together. No extra credential source or generation call is required; the selected shared Google AI session continues to work.
+
+References: https://github.com/Draculabo/AntigravityManager/pull/369 and https://github.com/pingdotgg/t3code/issues/24800 . Verified with quota-only live reads; no credentials or account-specific quota observations are stored here.
+
+### Independent Google products
+
+Gemini and Antigravity are separate providers in the panel, Settings, menubar and dashboard. Their persisted provider IDs and quota history stay unchanged. Tracking, metric selections, order, disclosure state and dashboard filtering are independent.
+
+Gemini retains Gemini native or selected browser authentication. Antigravity reads only the exact native `antigravityUnifiedStateSync.oauthToken` and `antigravityAuthStatus` keys from the IDE profile (legacy app profile only when no IDE profile exists). It refreshes with its own client and keeps access tokens in RAM; it never falls back to Gemini credentials or a CLI identity. A source change intentionally starts a distinct history series.
+
+### Native Gemini tier and Antigravity identity
+
+Gemini's installed SwiftProtobuf `Assistant_Mobile_Robin_UserSubscriptionTier` name map identifies `2` as `TIER1`; the verified display name is Pro. Only this tier is mapped; unknown values stay unlabeled. Native GetUsageInfo currently returns GXU five-hour and weekly pools on the checked account, plus non-quota display/settings metadata. Additional non-GXU pools with nonempty payloads produce compatibility diagnostics rather than invented percentages.
+
+The current Antigravity IDE stores the account email in the exact `userStatusSentinelKey` payload, UserStatus field 7. It can be used even when the legacy `antigravityAuthStatus` JSON is absent. Conflicting native identity caches do not produce an email label. No Gemini identity is used.
+
+Codex model availability booleans are not quota measurements and are intentionally not displayed.

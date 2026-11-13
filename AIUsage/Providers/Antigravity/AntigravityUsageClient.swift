@@ -77,6 +77,29 @@ struct AntigravityUsageClient: Sendable {
             "arch=\(architecture))"
     }()
 
+    /// Argon is omitted for the legacy bare client identity even on a paid account.
+    /// Use the installed hub version, with the minimum verified Argon-compatible identity.
+    static let quotaSummaryUserAgent: String = {
+        let paths = ["/Applications/Antigravity.app", expandHome("~/Applications/Antigravity.app")]
+        let version = paths.compactMap { Bundle(url: URL(fileURLWithPath: $0))?
+            .object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String }.first
+        return hubUserAgent(version: version)
+    }()
+
+    static func hubUserAgent(version: String?) -> String {
+        let minimum = "2.26.0"
+        let selected = version.flatMap {
+            $0.range(of: #"^\d+\.\d+\.\d+$"#, options: .regularExpression) != nil &&
+            $0.compare(minimum, options: .numeric) != .orderedAscending ? $0 : nil
+        } ?? minimum
+        #if arch(arm64)
+        let architecture = "arm64"
+        #else
+        let architecture = "amd64"
+        #endif
+        return "antigravity/hub/\(selected) (aidev_client; os_type=darwin; arch=\(architecture))"
+    }
+
     /// The `ClientMetadata` Antigravity sends. Without it `loadCodeAssist`
     /// returns only `allowedTiers`, so neither the plan nor the project can
     /// be read.
@@ -121,9 +144,8 @@ struct AntigravityUsageClient: Sendable {
         return .unavailable
     }
 
-    /// Asks production first and stops there when its answer already holds
-    /// every shared pool; otherwise also asks the daily host so the mapper can
-    /// merge the pools each host returned.
+    /// Ask production first. Four shared pools do not prove completeness:
+    /// another host can still supply the independent Argon weekly bucket.
     func quotaSummary(
         accessToken: String,
         project: String?,
@@ -140,21 +162,17 @@ struct AntigravityUsageClient: Sendable {
         }
 
         var responses: [HTTPResponse] = []
-        for (index, base) in Self.cloudBases.enumerated() {
+        for base in Self.cloudBases {
             guard let url = URL(string: base + Self.summaryPath),
                   let response = try? await http.send(request(
                       url: url,
                       accessToken: accessToken,
-                      body: payload
+                      body: payload,
+                      userAgent: Self.quotaSummaryUserAgent
                   )) else {
                 continue
             }
             responses.append(response)
-            if index == 0,
-               (200..<300).contains(response.statusCode),
-               AntigravityUsageMapper.isCompleteSummary(response.body) {
-                break
-            }
         }
 
         let bodies = responses
@@ -223,7 +241,8 @@ struct AntigravityUsageClient: Sendable {
     private func request(
         url: URL,
         accessToken: String,
-        body: Data
+        body: Data,
+        userAgent: String = Self.userAgent
     ) -> HTTPRequest {
         HTTPRequest(
             method: .post,
@@ -232,7 +251,7 @@ struct AntigravityUsageClient: Sendable {
                 "Accept": "application/json",
                 "Authorization": "Bearer \(accessToken)",
                 "Content-Type": "application/json",
-                "User-Agent": Self.userAgent
+                "User-Agent": userAgent
             ],
             body: body
         )

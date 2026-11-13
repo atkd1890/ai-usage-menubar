@@ -77,7 +77,7 @@ struct SettingsView: View {
     }
 
     private var providerRows: some View {
-        providerRowsContent(GoogleAIGroup.ordered(preferences.providerOrder.filter(\.isEnabledInBuild)).map(\.descriptor))
+        providerRowsContent(preferences.providerOrder.filter(\.isEnabledInBuild).map(\.descriptor))
     }
 
     private func providerRowsContent(
@@ -89,12 +89,6 @@ struct SettingsView: View {
             Divider()
 
             ForEach(descriptors) { descriptor in
-                if GoogleAIGroup.members.contains(descriptor.id) {
-                    if descriptor.id == descriptors.first(where: { GoogleAIGroup.members.contains($0.id) })?.id {
-                        googleSettingsRow(anchor: descriptor.id)
-                        if descriptor.id != descriptors.last?.id { Divider() }
-                    }
-                } else {
                 let availableItems = store.availableMenuBarItems(
                     for: descriptor.id
                 )
@@ -148,46 +142,9 @@ struct SettingsView: View {
                 if descriptor.id != descriptors.last?.id {
                     Divider()
                 }
-                }
             }
         }
         .coordinateSpace(.named(Self.rowsSpace))
-    }
-
-    private func googleSettingsRow(anchor: ProviderID) -> some View {
-        let method = preferences.loginMethod(for: .gemini)
-        let members: [ProviderID] = [.edge, .chrome].contains(method) ? [.gemini] : [.gemini, .antigravity]
-        let items = members.flatMap { store.states[$0]?.snapshot?.availableMenuBarItems ?? [] }
-        let selected = Set(items.filter { preferences.isMenuBarMetricSelected($0) })
-        let tracking = members.contains { preferences.isTracking($0) }
-        let visible = members.contains { preferences.isProviderShownInMenuBar($0) }
-        return ProviderSettingsRow(
-            descriptor: ProviderDescriptor(id: anchor, displayName: "Google AI", iconAssetName: "ProviderGemini",
-                executableNames: [], installationIndicators: [], defaultMenuBarMetric: .weekly),
-            state: store.states[.gemini], isTracking: tracking, isVisible: visible,
-            selectedMetrics: [], availableItems: items,
-            setTracking: { enabled in
-                if enabled { preferences.setLoginMethod(preferences.loginMethod(for: .gemini), for: .gemini) }
-                preferences.setGoogleAITracking(enabled)
-                store.setTrackedProviders(preferences.trackedProviderIDs)
-            },
-            setVisible: { enabled in
-                preferences.setGoogleAIMenuBarVisibility(enabled, availableItems: items)
-            },
-            setMetric: { item, enabled in
-                preferences.setMenuBarMetric(enabled, item: item,
-                    availableItems: items.filter { $0.provider == item.provider })
-            },
-            isDragging: draggingProvider == anchor,
-            reportFrame: { rowFrames[anchor] = $0 },
-            dragChanged: { handleDrag(of: anchor, at: $0) },
-            dragEnded: { draggingProvider = nil },
-            move: { offset in preferences.moveProvider(anchor, by: offset) },
-            rowsSpace: Self.rowsSpace,
-            displayNameOverride: "Google AI", selectedMetricItems: selected,
-            loginPreferences: preferences, loginChanged: { store.reconnect(providerIDs: GoogleAIGroup.members) },
-            connectionStates: members.compactMap { store.states[$0] }
-        )
     }
 
     private static let rowsSpace = "providerRows"
@@ -351,9 +308,11 @@ private struct ProviderSettingsRow: View {
         let states = connectionStates ?? [state].compactMap { $0 }
         let status = states.first(where: { $0.isRefreshing })
             ?? states.first(where: { $0.failure != nil || $0.snapshot == nil })
+            ?? states.first(where: { !($0.snapshot?.quotaCompatibilityNotes.isEmpty ?? true) })
             ?? states.first
+        let notes = status?.snapshot?.quotaCompatibilityNotes.map(\.value).joined(separator: " · ") ?? ""
         return ProviderStatusView(state: status)
-            .help(status?.failure?.message ?? "Usage loaded successfully using the selected login method.")
+            .help(status?.failure?.message ?? (notes.isEmpty ? "Usage loaded successfully using the selected login method." : notes))
     }
 
     var body: some View {
@@ -399,9 +358,9 @@ private struct ProviderSettingsRow: View {
                     .fixedSize(horizontal: true, vertical: false)
                     .frame(width: 180, alignment: .leading)
                     .help("Uses the selected credential source immediately and reports the quota fetch result beneath the provider name.")
-                    if descriptor.id == .manus, state?.failure?.kind == .storage {
+                    if [ProviderID.manus, .muse].contains(descriptor.id), state?.failure?.kind == .storage {
                         Button("Allow Edge access…") {
-                            if BrowserDatabaseAccess.request() { loginChanged() }
+                            if BrowserDatabaseAccess.request(providerName: displayName) { loginChanged() }
                         }
                         .controlSize(.small)
                         .help("Choose only Edge Default's Cookies file using the macOS permission dialog.")
@@ -705,7 +664,11 @@ private struct ProviderStatusPresentation {
             return
         }
 
-        if state.snapshot != nil {
+        if let snapshot = state.snapshot, !snapshot.quotaCompatibilityNotes.isEmpty {
+            text = "Connected · Partial data"
+            systemImage = "exclamationmark.triangle"
+            color = .orange
+        } else if state.snapshot != nil {
             text = "Connected"
             systemImage = "checkmark.circle.fill"
             color = .green

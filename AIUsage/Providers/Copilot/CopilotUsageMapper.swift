@@ -39,6 +39,16 @@ enum CopilotUsageMapper {
             windows.append(completions)
         }
 
+        var notices: [ProviderUsageDetail] = []
+        for key in (snapshots ?? [:]).keys.sorted() where !["chat", "completions", "premium_interactions"].contains(key) {
+            guard let bucket = ProviderParsing.object(snapshots?[key]) else { continue }
+            if let window = quotaWindow(bucket, kind: .additional(id: "copilot." + key, title: QuotaDiscovery.name(key)), resetsAt: reset) {
+                windows.append(window)
+            } else if bucket["has_quota"] as? Bool != false && bucket["unlimited"] as? Bool != true &&
+                QuotaDiscovery.number(bucket["entitlement"]) != -1 && QuotaDiscovery.number(bucket["entitlement"]) != 0 {
+                notices.append(QuotaDiscovery.notice(key))
+            }
+        }
         if windows.isEmpty {
             let limited = ProviderParsing.object(body["limited_user_quotas"])
             let monthly = ProviderParsing.object(body["monthly_quotas"])
@@ -73,7 +83,8 @@ enum CopilotUsageMapper {
             planName: planName(body["copilot_plan"]),
             windows: windows,
             fetchedAt: now,
-            usageScope: "Account usage · quotas and credits shown separately"
+            usageScope: "Account usage · quotas and credits shown separately",
+            usageDetails: notices
         )
     }
 

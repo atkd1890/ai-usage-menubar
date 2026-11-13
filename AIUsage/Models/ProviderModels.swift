@@ -13,6 +13,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
     case gemini
     case manus
     case kimi
+    case muse
 
     // Keep enum cases for decoding saved preferences; only these providers run/show.
     static let enabledCases: [Self] = [
@@ -21,7 +22,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
         // .grok, // Grok Build (CLI): temporarily hidden.
         // .kiro,
         // .zai,
-        .gemini, .manus, .kimi
+        .gemini, .manus, .kimi, .muse
     ]
 
     var isEnabledInBuild: Bool { Self.enabledCases.contains(self) }
@@ -33,13 +34,14 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .codex: "Codex"
         case .cursor: "Cursor"
         case .antigravity: "Antigravity"
-        case .copilot: "GitHub Copilot"
+        case .copilot: "GitHub"
         case .devin: "Devin"
         case .grok: "Grok Build (CLI)"
         case .kiro: "Kiro"
         case .zai: "Z.ai"
         case .manus: "Manus"
         case .kimi: "Kimi"
+        case .muse: "Muse"
         case .gemini: "Gemini"
         }
     }
@@ -57,6 +59,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .zai: "ProviderZAI"
         case .manus: "ProviderManus"
         case .kimi: "ProviderKimi"
+        case .muse: "ProviderMuse"
         case .gemini: "ProviderGemini"
         }
     }
@@ -88,7 +91,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .devin: ["devin"]
         case .grok: ["grok"]
         case .kiro: ["kiro", "kiro-cli"]
-        case .zai, .gemini, .manus, .kimi: []
+        case .zai, .gemini, .manus, .kimi, .muse: []
         }
     }
 
@@ -109,7 +112,9 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
                 "/Applications/Antigravity.app",
                 "~/Applications/Antigravity.app",
                 "~/Library/Application Support/Antigravity",
-                GeminiNativeAuthStore.root + "/account_config"
+                "/Applications/Antigravity IDE.app",
+                "~/Applications/Antigravity IDE.app",
+                "~/Library/Application Support/Antigravity IDE"
             ]
         case .copilot:
             [
@@ -137,7 +142,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .gemini:
             [GeminiNativeAuthStore.root + "/account_config"] +
                 GeminiCredentialSource.edge.cookiePaths + GeminiCredentialSource.chrome.cookiePaths
-        case .manus:
+        case .manus, .muse:
             ["~/Library/Application Support/Microsoft Edge/Default/Cookies"]
         case .kimi:
             ["~/Library/Application Support/kimi-desktop/Local Storage/leveldb"]
@@ -152,12 +157,12 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .kimi: .totalUsage
         case .cursor: .totalUsage
         case .copilot, .kiro: .credits
-        case .claude, .codex, .antigravity, .devin, .grok, .zai, .gemini: .weekly
+        case .claude, .codex, .antigravity, .devin, .grok, .zai, .gemini, .muse: .weekly
         }
     }
 }
 
-enum QuotaKind: String, Codable, Hashable, Sendable {
+enum QuotaKind: RawRepresentable, Codable, Hashable, Sendable {
     case session
     case weekly
     case daily
@@ -176,6 +181,75 @@ enum QuotaKind: String, Codable, Hashable, Sendable {
     case argonWeekly
     case webSearches
     case freeTrial
+    case additional(id: String, title: String)
+
+    typealias RawValue = String
+    var rawValue: String {
+        switch self {
+        case .session: "session"
+        case .weekly: "weekly"
+        case .daily: "daily"
+        case .sonnet: "sonnet"
+        case .fable: "fable"
+        case .sparkSession: "sparkSession"
+        case .sparkWeekly: "sparkWeekly"
+        case .totalUsage: "totalUsage"
+        case .autoUsage: "autoUsage"
+        case .apiUsage: "apiUsage"
+        case .credits: "credits"
+        case .chat: "chat"
+        case .completions: "completions"
+        case .claudePool: "claudePool"
+        case .claudePoolWeekly: "claudePoolWeekly"
+        case .argonWeekly: "argonWeekly"
+        case .webSearches: "webSearches"
+        case .freeTrial: "freeTrial"
+        case .additional(let id, _): "additional:" + id
+        }
+    }
+    init?(rawValue: String) {
+        switch rawValue {
+        case "session": self = .session
+        case "weekly": self = .weekly
+        case "daily": self = .daily
+        case "sonnet": self = .sonnet
+        case "fable": self = .fable
+        case "sparkSession": self = .sparkSession
+        case "sparkWeekly": self = .sparkWeekly
+        case "totalUsage": self = .totalUsage
+        case "autoUsage": self = .autoUsage
+        case "apiUsage": self = .apiUsage
+        case "credits": self = .credits
+        case "chat": self = .chat
+        case "completions": self = .completions
+        case "claudePool": self = .claudePool
+        case "claudePoolWeekly": self = .claudePoolWeekly
+        case "argonWeekly": self = .argonWeekly
+        case "webSearches": self = .webSearches
+        case "freeTrial": self = .freeTrial
+        default:
+            guard rawValue.hasPrefix("additional:"), rawValue.count > 11 else { return nil }
+            let id = String(rawValue.dropFirst(11))
+            self = .additional(id: id, title: id)
+        }
+    }
+    init(from decoder: Decoder) throws {
+        if let raw = try? decoder.singleValueContainer().decode(String.self), let value = Self(rawValue: raw) {
+            self = value; return
+        }
+        let value = try AdditionalQuotaIdentifier(from: decoder)
+        guard value.id.hasPrefix("additional:"), value.id.count > 11 else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Invalid additional quota identifier"))
+        }
+        self = .additional(id: String(value.id.dropFirst(11)), title: value.title)
+    }
+    func encode(to encoder: Encoder) throws {
+        if case .additional = self { try AdditionalQuotaIdentifier(id: rawValue, title: title).encode(to: encoder) }
+        else { var container = encoder.singleValueContainer(); try container.encode(rawValue) }
+    }
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.rawValue == rhs.rawValue }
+    func hash(into hasher: inout Hasher) { hasher.combine(rawValue) }
+
 
     var title: String {
         switch self {
@@ -197,6 +271,7 @@ enum QuotaKind: String, Codable, Hashable, Sendable {
         case .argonWeekly: "Argon Weekly"
         case .webSearches: "Web Searches"
         case .freeTrial: "Free Trial"
+        case .additional(_, let title): title
         }
     }
 
@@ -220,11 +295,12 @@ enum QuotaKind: String, Codable, Hashable, Sendable {
         case .argonWeekly: .argonWeekly
         case .webSearches: .webSearches
         case .freeTrial: .freeTrial
+        case .additional(let id, let title): .additional(id: id, title: title)
         }
     }
 }
 
-enum MenuBarMetricID: String, CaseIterable, Codable, Identifiable, Sendable {
+enum MenuBarMetricID: RawRepresentable, CaseIterable, Codable, Hashable, Identifiable, Sendable {
     case session
     case weekly
     case daily
@@ -245,6 +321,81 @@ enum MenuBarMetricID: String, CaseIterable, Codable, Identifiable, Sendable {
     case extraUsage
     case credits
     case resets
+    case additional(id: String, title: String)
+
+    typealias RawValue = String
+    var rawValue: String {
+        switch self {
+        case .session: "session"
+        case .weekly: "weekly"
+        case .daily: "daily"
+        case .sonnet: "sonnet"
+        case .fable: "fable"
+        case .spark: "spark"
+        case .sparkWeekly: "sparkWeekly"
+        case .totalUsage: "totalUsage"
+        case .autoUsage: "autoUsage"
+        case .apiUsage: "apiUsage"
+        case .chat: "chat"
+        case .completions: "completions"
+        case .claudePool: "claudePool"
+        case .claudePoolWeekly: "claudePoolWeekly"
+        case .argonWeekly: "argonWeekly"
+        case .webSearches: "webSearches"
+        case .freeTrial: "freeTrial"
+        case .extraUsage: "extraUsage"
+        case .credits: "credits"
+        case .resets: "resets"
+        case .additional(let id, _): "additional:" + id
+        }
+    }
+    init?(rawValue: String) {
+        switch rawValue {
+        case "session": self = .session
+        case "weekly": self = .weekly
+        case "daily": self = .daily
+        case "sonnet": self = .sonnet
+        case "fable": self = .fable
+        case "spark": self = .spark
+        case "sparkWeekly": self = .sparkWeekly
+        case "totalUsage": self = .totalUsage
+        case "autoUsage": self = .autoUsage
+        case "apiUsage": self = .apiUsage
+        case "chat": self = .chat
+        case "completions": self = .completions
+        case "claudePool": self = .claudePool
+        case "claudePoolWeekly": self = .claudePoolWeekly
+        case "argonWeekly": self = .argonWeekly
+        case "webSearches": self = .webSearches
+        case "freeTrial": self = .freeTrial
+        case "extraUsage": self = .extraUsage
+        case "credits": self = .credits
+        case "resets": self = .resets
+        default:
+            guard rawValue.hasPrefix("additional:"), rawValue.count > 11 else { return nil }
+            let id = String(rawValue.dropFirst(11))
+            self = .additional(id: id, title: id)
+        }
+    }
+    init(from decoder: Decoder) throws {
+        if let raw = try? decoder.singleValueContainer().decode(String.self), let value = Self(rawValue: raw) {
+            self = value; return
+        }
+        let value = try AdditionalQuotaIdentifier(from: decoder)
+        guard value.id.hasPrefix("additional:"), value.id.count > 11 else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Invalid additional quota identifier"))
+        }
+        self = .additional(id: String(value.id.dropFirst(11)), title: value.title)
+    }
+    func encode(to encoder: Encoder) throws {
+        if case .additional = self { try AdditionalQuotaIdentifier(id: rawValue, title: title).encode(to: encoder) }
+        else { var container = encoder.singleValueContainer(); try container.encode(rawValue) }
+    }
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.rawValue == rhs.rawValue }
+    func hash(into hasher: inout Hasher) { hasher.combine(rawValue) }
+
+    static let allCases: [Self] = [.session, .weekly, .daily, .sonnet, .fable, .spark, .sparkWeekly, .totalUsage, .autoUsage, .apiUsage, .chat, .completions, .claudePool, .claudePoolWeekly, .argonWeekly, .webSearches, .freeTrial, .extraUsage, .credits, .resets]
+
 
     var id: Self { self }
 
@@ -267,6 +418,7 @@ enum MenuBarMetricID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .argonWeekly: "Argon Weekly"
         case .webSearches: "Web Searches"
         case .freeTrial: "Free Trial"
+        case .additional(_, let title): title
         case .extraUsage: "Extra Usage"
         case .credits: "Credits"
         case .resets: "Resets"
@@ -295,6 +447,7 @@ enum MenuBarMetricID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .extraUsage: "dollarsign.circle"
         case .credits: "creditcard"
         case .resets: "arrow.counterclockwise"
+        case .additional: "gauge.with.dots.needle.50percent"
         }
     }
 
@@ -320,6 +473,7 @@ enum MenuBarMetricID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .extraUsage: "E"
         case .credits: "C"
         case .resets: "R"
+        case .additional(_, let title): String(title.prefix(6))
         }
     }
 
@@ -344,6 +498,7 @@ enum MenuBarMetricID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .freeTrial: .freeTrial
         case .credits: .credits
         case .extraUsage, .resets: nil
+        case .additional(let id, let title): .additional(id: id, title: title)
         }
     }
 }
@@ -532,9 +687,10 @@ struct ProviderSnapshot: Equatable, Sendable {
         switch provider {
         case .claude: return "Shared account limits • Chat, Code & Cowork"
         case .codex: return "Shared allowance • Codex & ChatGPT Work"
-        case .copilot: return "Account usage • GitHub Copilot"
+        case .copilot: return "Account usage • GitHub"
         case .cursor: return "Product usage • Cursor"
-        case .gemini, .antigravity: return nil // Google AI group owns the subtitle.
+        case .gemini: return "Product usage • Gemini"
+        case .antigravity: return "Product usage • Antigravity"
         default: return usageScope
         }
     }
@@ -549,7 +705,20 @@ struct ProviderSnapshot: Equatable, Sendable {
     let usageBreakdown: ConsumptionBreakdown?
 
     var identityEmail: String? {
-        accountEmail ?? (GoogleAIGroup.members.contains(provider) ? AccountEmail.validated(accountLabel) : nil)
+        accountEmail ?? ([ProviderID.gemini, .antigravity].contains(provider) ? AccountEmail.validated(accountLabel) : nil)
+    }
+
+    /// A credential-scoped native identity can retain history without inventing an email.
+    var historyIdentity: String? {
+        if let email = identityEmail { return email }
+        guard let label = accountLabel else { return nil }
+        let prefix: String
+        if provider == .antigravity && credentialSource == "Antigravity app" { prefix = "native-session:" }
+        else if provider == .muse && credentialSource == "Edge Default" { prefix = "muse-session:" }
+        else { return nil }
+        guard label.hasPrefix(prefix), label.dropFirst(prefix.count).count == 64,
+              label.dropFirst(prefix.count).allSatisfy({ $0.isHexDigit }) else { return nil }
+        return label
     }
 
     var consumptionShares: [ConsumptionShare] {
@@ -856,34 +1025,7 @@ struct SystemDateProvider: DateProviding {
 
 
 /// Presentation grouping only: provider IDs, authentication and quota remain independent.
-enum GoogleAIGroup {
-    static let members: Set<ProviderID> = [.gemini, .antigravity]
-
-    /// Anchor the group at its first member; preserve each child's stored relative order.
-    static func ordered(_ providers: [ProviderID]) -> [ProviderID] {
-        let children = providers.filter { members.contains($0) }
-        var inserted = false
-        return providers.flatMap { provider -> [ProviderID] in
-            guard members.contains(provider) else { return [provider] }
-            guard !inserted else { return [] }
-            inserted = true
-            return children
-        }
-    }
-
-    static func sharedEmail(_ states: [ProviderState]) -> String? {
-        guard !states.isEmpty, states.allSatisfy({ $0.snapshot?.identityEmail != nil }) else { return nil }
-        let emails = states.compactMap { $0.snapshot?.identityEmail }
-        return Set(emails.map { $0.lowercased() }).count == 1 ? emails.first : nil
-    }
-
-    static func sharedPlan(_ states: [ProviderState]) -> String? {
-        if states.count == 1 { return states.first?.snapshot?.planName }
-        // Equal subscription names do not prove both adapters use the same Google account.
-        guard !states.isEmpty,
-              states.allSatisfy({ $0.snapshot?.accountLabel?.isEmpty == false }),
-              Set(states.compactMap { $0.snapshot?.accountLabel?.lowercased() }).count == 1,
-              Set(states.compactMap { $0.snapshot?.planName }.filter { !$0.isEmpty }).count == 1 else { return nil }
-        return states.compactMap { $0.snapshot?.planName }.first { !$0.isEmpty }
-    }
+private struct AdditionalQuotaIdentifier: Codable {
+    let id: String
+    let title: String
 }

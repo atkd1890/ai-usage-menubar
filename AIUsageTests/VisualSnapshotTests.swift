@@ -138,7 +138,7 @@ final class VisualSnapshotTests: XCTestCase {
         XCTAssertGreaterThan(size.height, 250)
     }
 
-    func testSettingsShowsEnabledProviderGroupsInLightAndDark() async {
+    func testSettingsShowsIndependentProvidersInLightAndDark() async {
         let store = await makeFullyPopulatedStore()
         let suiteName = "VisualSnapshotTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
@@ -164,7 +164,7 @@ final class VisualSnapshotTests: XCTestCase {
             XCTAssertEqual(size.width, width, accuracy: 0.5)
             // Enabled products and Google grouping replace the original nine-row panel.
             // The native settings window constrains and scrolls taller content.
-            XCTAssertLessThan(size.height, 900)
+            XCTAssertLessThan(size.height, 1100)
             XCTAssertGreaterThan(size.height, 300)
         }
 

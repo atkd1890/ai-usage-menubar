@@ -139,7 +139,10 @@ struct ProviderSectionView: View {
                 AccountEmailLabel(email: email)
             }
             if !embedded, let plan = state.snapshot?.planName {
-                Text(plan)
+                let formattedPlan = [ProviderID.gemini, .antigravity].contains(state.provider)
+                    ? plan.replacingOccurrences(of: "Google AI ", with: "")
+                    : (state.provider == .muse ? plan.replacingOccurrences(of: "muse", with: "", options: .caseInsensitive).trimmingCharacters(in: .whitespaces) : plan)
+                Text(formattedPlan.isEmpty ? plan : formattedPlan)
                     .font(.caption2.weight(.medium))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -416,9 +419,7 @@ private struct QuotaGrid: View {
     }
 
     private var rows: [[QuotaWindow]] {
-        stride(from: 0, to: windows.count, by: 2).map { index in
-            Array(windows[index..<min(index + 2, windows.count)])
-        }
+        ProviderDetailsLayout.rows(windows)
     }
 }
 
@@ -723,63 +724,6 @@ struct AdditionalUsageSection: View {
     }
 }
 
-struct GoogleAISectionView: View {
-    let states: [ProviderState]
-    let displayMode: UsageDisplayMode
-    @State private var isExpanded = false
-    var part: ProviderSectionPart = .all
-    var expandedOverride: Bool? = nil
-    var onToggle: (() -> Void)? = nil
-    private var showsDetails: Bool { expandedOverride ?? isExpanded }
-    private var visibleStates: [ProviderState] { part == .summary ? Array(states.prefix(1)) : part == .details || showsDetails ? states : Array(states.prefix(1)) }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            if part != .details {
-            HStack(spacing: 9) {
-                Text("G").font(.headline.weight(.semibold)).frame(width: 18, height: 18)
-                ProviderDisclosureTitle(title: "Google AI", isExpanded: Binding(get: { showsDetails }, set: { value in
-                    if let onToggle { onToggle() } else { isExpanded = value }
-                }),
-                    canExpand: states.count > 1 || states.first?.snapshot.map(ProviderDetailsLayout.canExpand) == true)
-                    .layoutPriority(1)
-                Spacer()
-                if let email = GoogleAIGroup.sharedEmail(states) {
-                    AccountEmailLabel(email: email)
-                }
-                if let plan = GoogleAIGroup.sharedPlan(states) {
-                    Text(plan.hasPrefix("Google AI ") ? String(plan.dropFirst("Google AI ".count)) : plan)
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(.primary.opacity(0.06), in: Capsule())
-                        .accessibilityLabel("Plan \(plan)")
-                    .fixedSize(horizontal: true, vertical: false)
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.top, 10)
-            .padding(.bottom, 5)
-            Text(states.count == 1 && states.first?.provider == .gemini ? "Product usage • Gemini" : "Separate usage limits • Gemini & Antigravity")
-                .font(.caption2).foregroundStyle(.secondary)
-                .padding(.horizontal, 14).padding(.bottom, 8)
-            }
-            ForEach(Array(visibleStates.enumerated()), id: \.element.provider) { index, state in
-                if index > 0 {
-                    Divider()
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 6)
-                }
-                ProviderSectionView(state: state, displayMode: displayMode, embedded: true, expandedOverride: showsDetails,
-                                    part: part == .details && index == 0 ? .details : part == .summary ? .summary : .all)
-            }
-        }
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
-    }
-}
-
 struct AccountEmailLabel: View {
     let email: String
     var body: some View {
@@ -795,6 +739,21 @@ struct AccountEmailLabel: View {
 
 /// One quota-grid row is visible until the user explicitly expands the provider.
 enum ProviderDetailsLayout {
+    static func rows(_ windows: [QuotaWindow]) -> [[QuotaWindow]] {
+        var result: [[QuotaWindow]] = []
+        var pair: [QuotaWindow] = []
+        for window in windows {
+            if window.kind == .argonWeekly || window.kind.rawValue.hasPrefix("additional:") {
+                if !pair.isEmpty { result.append(pair); pair = [] }
+                result.append([window])
+            } else {
+                pair.append(window)
+                if pair.count == 2 { result.append(pair); pair = [] }
+            }
+        }
+        if !pair.isEmpty { result.append(pair) }
+        return result
+    }
     static func windows(_ snapshot: ProviderSnapshot, expanded: Bool) -> [QuotaWindow] {
         let ordered = snapshot.provider == .claude
             ? snapshot.windows.filter { [.session, .weekly].contains($0.kind) }

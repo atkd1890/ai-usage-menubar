@@ -56,9 +56,9 @@ final class AntigravityTests: XCTestCase {
         """)], planName: nil, now: now))
         XCTAssertEqual(
             byGroup.windows.map(\.kind),
-            [.weekly, .argonWeekly, .claudePoolWeekly]
+            [.weekly, .claudePoolWeekly, .argonWeekly]
         )
-        XCTAssertEqual(byGroup.windows.map(\.usedPercent), [40, 75, 50])
+        XCTAssertEqual(byGroup.windows.map(\.usedPercent), [40, 50, 75])
 
         let byIdentifier = try XCTUnwrap(AntigravityUsageMapper.summary([summary("""
         {"displayName":"Gemini Models","buckets":[
@@ -103,8 +103,8 @@ final class AntigravityTests: XCTestCase {
         ))
     }
 
-    func testCompleteSummaryNeedsEverySharedPool() {
-        XCTAssertTrue(AntigravityUsageMapper.isCompleteSummary(completeSummary))
+    func testSharedPoolsAloneDoNotProveArgonCompleteness() {
+        XCTAssertFalse(AntigravityUsageMapper.isCompleteSummary(completeSummary))
         XCTAssertFalse(AntigravityUsageMapper.isCompleteSummary(summary("""
         {"displayName":"Claude and GPT models","buckets":[
           {"bucketId":"3p-5h","remainingFraction":1},
@@ -137,11 +137,52 @@ final class AntigravityTests: XCTestCase {
         XCTAssertNil(AntigravityUsageMapper.project(unnamed))
     }
 
+    private var withArgonJSON: String {
+        var root = try! JSONSerialization.jsonObject(with: completeSummary) as! [String: Any]
+        var groups = root["groups"] as! [[String: Any]]
+        groups.append(["displayName": "Gemini 4 Argon", "buckets": [[
+            "bucketId": "gemini-argon-wtu-weekly", "window": "weekly",
+            "remainingFraction": 0.0082632, "resetTime": "2026-11-18T10:06:53Z"
+        ]]])
+        root["groups"] = groups
+        return String(data: try! JSONSerialization.data(withJSONObject: root), encoding: .utf8)!
+    }
+
+    func testArgonHasItsOwnRowWithoutSplittingThirdPartyPair() {
+        let kinds: [QuotaKind] = [.session, .weekly, .claudePool, .claudePoolWeekly, .argonWeekly]
+        let windows = kinds.map { QuotaWindow(kind: $0, usedPercent: 0, resetsAt: nil) }
+        XCTAssertEqual(ProviderDetailsLayout.rows(windows).map { $0.map(\.kind) },
+                       [[.session, .weekly], [.claudePool, .claudePoolWeekly], [.argonWeekly]])
+    }
+
+    func testHubIdentityUsesInstalledVersionAndRejectsStaleOrMalformedVersions() {
+        XCTAssertTrue(AntigravityUsageClient.hubUserAgent(version: "2.31.2").hasPrefix("antigravity/hub/2.31.2 "))
+        for value in [nil, "2.24.0", "not-a-version", "2.31.2\r\nInjected: value"] {
+            XCTAssertTrue(AntigravityUsageClient.hubUserAgent(version: value).hasPrefix("antigravity/hub/2.26.0 "))
+        }
+    }
+
+    func testDailyHostCanAddConsumedArgonAfterAllSharedPoolsArePresent() async throws {
+        let http = RoutedHTTPClient([
+            prod + AntigravityUsageClient.summaryPath: [httpResponse(json: completeJSON)],
+            daily + AntigravityUsageClient.summaryPath: [httpResponse(json: withArgonJSON)]
+        ])
+        let outcome = await AntigravityUsageClient(http: http).quotaSummary(accessToken: "test", project: nil, now: now)
+        guard case .success(let bodies) = outcome else { return XCTFail("Expected quota bodies") }
+        XCTAssertEqual(bodies.count, 2)
+        let snapshot = try XCTUnwrap(AntigravityUsageMapper.summary(bodies, planName: nil, now: now))
+        let argon = try XCTUnwrap(snapshot.windows.first { $0.kind == .argonWeekly })
+        XCTAssertEqual(argon.usedPercent, 99.17)
+        XCTAssertEqual(argon.resetsAt, ISO8601DateFormatter().date(from: "2026-11-18T10:06:53Z"))
+        let requests = await http.capturedRequests()
+        XCTAssertTrue(requests.allSatisfy { $0.headers["User-Agent"]?.hasPrefix("antigravity/hub/") == true })
+    }
+
     // MARK: - Cloud Code client
 
-    func testQuotaSummaryUsesTheClientIdentityAndStopsWhenProductionIsComplete() async {
+    func testQuotaSummaryUsesTheClientIdentityAndChecksBothHosts() async {
         let http = RoutedHTTPClient([
-            prod + AntigravityUsageClient.summaryPath: [httpResponse(json: completeJSON)]
+            prod + AntigravityUsageClient.summaryPath: [httpResponse(json: withArgonJSON)]
         ])
         let client = AntigravityUsageClient(http: http)
 
@@ -156,9 +197,9 @@ final class AntigravityTests: XCTestCase {
         }
         XCTAssertEqual(bodies.count, 1)
         let requests = await http.capturedRequests()
-        XCTAssertEqual(requests.count, 1)
-        XCTAssertEqual(requests[0].headers["User-Agent"], AntigravityUsageClient.userAgent)
-        XCTAssertTrue(AntigravityUsageClient.userAgent.hasPrefix("antigravity/"))
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(requests[0].headers["User-Agent"], AntigravityUsageClient.quotaSummaryUserAgent)
+        XCTAssertTrue(AntigravityUsageClient.quotaSummaryUserAgent.hasPrefix("antigravity/"))
         let body = try? JSONSerialization.jsonObject(
             with: requests[0].body ?? Data()
         ) as? [String: String]
@@ -363,7 +404,7 @@ final class AntigravityTests: XCTestCase {
         let snapshot = try await provider.fetch()
 
         XCTAssertEqual(snapshot.windows.map(\.kind), [.weekly])
-        XCTAssertEqual(snapshot.windows.map(\.usedPercent), [61])
+        XCTAssertEqual(snapshot.windows.map(\.usedPercent), [61.31])
         XCTAssertEqual(snapshot.planName, "Google AI Pro")
         let local = await loopback.capturedRequests()
         XCTAssertEqual(local.first?.headers["X-Codeium-Csrf-Token"], "csrf-1")

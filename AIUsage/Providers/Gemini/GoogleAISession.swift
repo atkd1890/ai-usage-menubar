@@ -7,7 +7,7 @@ struct GoogleAIAccess: Sendable {
     let expiresAt: Date
 }
 
-/// One memory-only, account-bound session shared by both Google quota adapters.
+/// Memory-only, account-bound session for the Gemini native quota adapter.
 actor GoogleAISession {
     private let authStore: GeminiNativeAuthStore
     private let client: GeminiNativeUsageClient
@@ -38,7 +38,7 @@ actor GoogleAISession {
             let now = dateProvider.now()
             flight = (UUID(), credential.fingerprint, Task {
                 let token = try await client.refresh(credential: credential, client: config, now: now,
-                    scope: "https://www.googleapis.com/auth/assistant https://www.googleapis.com/auth/cloud-platform")
+                    scope: "https://www.googleapis.com/auth/assistant")
                 return GoogleAIAccess(token: token.value, accountLabel: credential.accountLabel,
                     fingerprint: credential.fingerprint, expiresAt: now.addingTimeInterval(token.expiresIn))
             })

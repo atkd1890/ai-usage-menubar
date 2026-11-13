@@ -37,7 +37,9 @@ final class AppPreferencesTests: XCTestCase {
         XCTAssertEqual(preferences.loginMethod(for: .antigravity), .desktop)
         preferences.setLoginMethod(.edge, for: .antigravity)
         XCTAssertTrue(preferences.geminiNativeAccessAllowed)
-        XCTAssertEqual(preferences.loginMethod(for: .gemini), .edge)
+        XCTAssertEqual(preferences.loginMethod(for: .gemini), .desktop)
+        preferences.setLoginMethod(.edge, for: .gemini)
+        XCTAssertEqual(preferences.loginMethod(for: .antigravity), .desktop)
         XCTAssertTrue(preferences.geminiEdgeCookiesAllowed)
         XCTAssertEqual(preferences.loginMethod(for: .cursor), .desktop)
     }
@@ -474,7 +476,7 @@ final class AppPreferencesTests: XCTestCase {
         let firstUpdatedRun = AppPreferences(defaults: defaults)
         XCTAssertEqual(
             firstUpdatedRun.trackedProviderIDs,
-            [.claude, .cursor, .antigravity, .copilot, .devin, .grok, .kiro, .zai, .gemini, .manus, .kimi]
+            [.claude, .cursor, .antigravity, .copilot, .devin, .grok, .kiro, .zai, .gemini, .manus, .kimi, .muse]
         )
 
         firstUpdatedRun.setTracking(false, for: .grok)
@@ -521,7 +523,7 @@ final class AppPreferencesTests: XCTestCase {
         }
         XCTAssertEqual(
             AppPreferences(defaults: defaults).trackedProviderIDs,
-            [.claude, .codex, .kiro, .zai, .gemini, .manus, .kimi]
+            [.claude, .codex, .kiro, .zai, .gemini, .manus, .kimi, .muse]
         )
     }
 
@@ -538,7 +540,7 @@ final class AppPreferencesTests: XCTestCase {
         let restored = AppPreferences(defaults: defaults)
         XCTAssertEqual(
             restored.trackedProviderIDs,
-            [.claude, .codex, .antigravity, .kiro, .zai, .gemini, .manus, .kimi]
+            [.claude, .codex, .antigravity, .kiro, .zai, .gemini, .manus, .kimi, .muse]
         )
 
         restored.setTracking(false, for: .zai)
@@ -557,7 +559,7 @@ final class AppPreferencesTests: XCTestCase {
         defaults.set(true, forKey: "zaiProviderAdded.v1")
 
         let updated = AppPreferences(defaults: defaults)
-        XCTAssertEqual(updated.trackedProviderIDs, [.claude, .codex, .kiro, .gemini, .manus, .kimi])
+        XCTAssertEqual(updated.trackedProviderIDs, [.claude, .codex, .kiro, .gemini, .manus, .kimi, .muse])
 
         updated.setTracking(false, for: .kiro)
         XCTAssertFalse(AppPreferences(defaults: defaults).isTracking(.kiro))
