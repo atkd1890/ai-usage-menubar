@@ -238,19 +238,13 @@ final class UsageStoreTests: XCTestCase {
             [
                 MenuBarItemID(provider: .codex, metric: .weekly),
                 MenuBarItemID(provider: .codex, metric: .spark),
-                MenuBarItemID(provider: .codex, metric: .sparkWeekly),
-                MenuBarItemID(provider: .codex, metric: .credits)
+                MenuBarItemID(provider: .codex, metric: .sparkWeekly)
             ]
         )
         XCTAssertFalse(store.isMenuBarItemAvailable(
             MenuBarItemID(provider: .codex, metric: .session)
         ))
-        XCTAssertEqual(
-            store.menuBarReading(
-                for: MenuBarItemID(provider: .codex, metric: .credits)
-            )?.value,
-            .credits(remaining: 120, usdValue: 4.8)
-        )
+        XCTAssertNil(store.menuBarReading(for: MenuBarItemID(provider: .codex, metric: .credits)))
     }
 
     func testMissingToolIsNeitherFetchedNorShown() async {

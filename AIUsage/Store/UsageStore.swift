@@ -7,18 +7,21 @@ struct MenuBarReading: Equatable, Sendable {
     let value: MenuBarReadingValue
     let displayMode: UsageDisplayMode
     let isStale: Bool
+    let isXSubscription: Bool
 
     init(
         provider: ProviderID,
         metric: MenuBarMetricID,
         value: MenuBarReadingValue,
         displayMode: UsageDisplayMode,
-        isStale: Bool
+        isStale: Bool,
+        isXSubscription: Bool = false
     ) {
         self.provider = provider
         self.metric = metric
         self.value = value
         self.displayMode = displayMode
+        self.isXSubscription = isXSubscription
         self.isStale = isStale
     }
 }
@@ -27,6 +30,7 @@ struct MenuBarProviderReadings: Equatable, Identifiable, Sendable {
     let provider: ProviderID
     let selectedMetrics: [MenuBarMetricID]
     let readings: [MenuBarReading]
+    var isXSubscription = false
 
     var id: ProviderID { provider }
     var showsMetricLabels: Bool { readings.count > 1 }
@@ -35,6 +39,9 @@ struct MenuBarProviderReadings: Equatable, Identifiable, Sendable {
 @MainActor
 @Observable
 final class UsageStore {
+    var alertController: UsageAlertController?
+    let analytics: TokenAnalytics
+    let history: UsageHistory
     private(set) var states: [ProviderID: ProviderState]
     private(set) var installedProviderIDs: Set<ProviderID>?
     private(set) var trackedProviderIDs: Set<ProviderID>
@@ -44,34 +51,42 @@ final class UsageStore {
 
     private let providers: [any UsageProvider]
     private let availabilityChecker: any ProviderAvailabilityChecking
+    private let loginMethod: @Sendable (ProviderID) -> ProviderLoginMethod
     private var cadenceTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
     private var refreshGeneration = 0
 
     init(
-        providers: [any UsageProvider] = [
-            ClaudeProvider(),
-            CodexProvider(),
-            CursorProvider(),
-            AntigravityProvider(),
-            CopilotProvider(),
-            DevinProvider(),
-            GrokProvider(),
-            KiroProvider(),
-            ZAIProvider()
-        ],
+        providers: [any UsageProvider]? = nil,
+        history: UsageHistory? = nil,
+        analytics: TokenAnalytics? = nil,
         availabilityChecker: any ProviderAvailabilityChecking =
             SystemProviderAvailabilityChecker(),
         refreshInterval: RefreshIntervalOption = .fiveMinutes,
-        trackedProviderIDs: Set<ProviderID> = Set(ProviderID.allCases)
+        trackedProviderIDs: Set<ProviderID> = Set(ProviderID.allCases),
+        loginMethod: @escaping @Sendable (ProviderID) -> ProviderLoginMethod = { .selected(for: $0) }
     ) {
-        self.providers = providers
+        self.analytics = analytics ?? TokenAnalytics(enabled: false)
+        self.history = history ?? UsageHistory()
+        self.providers = providers ?? Self.defaultProviders()
         self.availabilityChecker = availabilityChecker
+        self.loginMethod = loginMethod
         self.refreshInterval = refreshInterval
         self.trackedProviderIDs = trackedProviderIDs
         states = Dictionary(uniqueKeysWithValues: ProviderID.allCases.map {
             ($0, ProviderState(provider: $0))
         })
+    }
+
+    private static func defaultProviders() -> [any UsageProvider] {
+        let google = GoogleAISession()
+        return [CredentialSelectingProvider(local: ClaudeProvider(identity: AccountIdentityClient())), CredentialSelectingProvider(local: CodexProvider()),
+                CredentialSelectingProvider(local: CursorProvider(identity: AccountIdentityClient())),
+                ConsumerQuotaProvider(id: .manus), ConsumerQuotaProvider(id: .kimi),
+                GoogleAIAntigravityProvider(session: google), CopilotProvider(method: { .selected(for: .copilot) }, identity: AccountIdentityClient()),
+                // GrokProvider(), // Grok Build (CLI): temporarily disabled.
+                // Devin, Kiro and Z.ai remain temporarily disabled.
+                GeminiProvider(native: GeminiNativeProvider(session: google), identity: AccountIdentityClient())]
     }
 
     func start() {
@@ -114,6 +129,16 @@ final class UsageStore {
         cadenceTask = makeCadenceTask(refreshImmediately: false)
     }
 
+    /// A new source must not inherit a Connected badge or quota from the old source.
+    func reconnect(providerIDs: Set<ProviderID>) {
+        for id in providerIDs {
+            states[id]?.snapshot = nil
+            states[id]?.failure = nil
+            states[id]?.isRefreshing = trackedProviderIDs.contains(id)
+        }
+        refreshNow()
+    }
+
     func refreshNow() {
         cadenceTask?.cancel()
         cadenceTask = nil
@@ -132,6 +157,7 @@ final class UsageStore {
         let providers = self.providers
         let trackedProviderIDs = self.trackedProviderIDs
         let availabilityChecker = self.availabilityChecker
+        let supportedSources = Set(providers.map(\.id).filter(isSupportedByLoginMethod))
         let task = Task { [weak self] in
             let installedProviders =
                 await availabilityChecker.installedProviders()
@@ -139,9 +165,13 @@ final class UsageStore {
 
             self?.applyInstalledProviders(installedProviders)
 
+            for id in providers.map(\.id) where !supportedSources.contains(id) {
+                self?.states[id] = ProviderState(provider: id)
+            }
             let requested = requestedProviderIDs ?? trackedProviderIDs
             let effectiveProviders = providers.filter { provider in
-                trackedProviderIDs.contains(provider.id) &&
+                provider.id.isEnabledInBuild &&
+                    trackedProviderIDs.contains(provider.id) && supportedSources.contains(provider.id) &&
                     requested.contains(provider.id) &&
                     (installedProviders?.contains(provider.id) ?? true)
             }
@@ -194,15 +224,20 @@ final class UsageStore {
         }
     }
 
+    private func isSupportedByLoginMethod(_ provider: ProviderID) -> Bool {
+        guard provider == .antigravity else { return true }
+        return ![ProviderLoginMethod.edge, .chrome].contains(loginMethod(.gemini))
+    }
+
     func isProviderVisibleInDashboard(_ provider: ProviderID) -> Bool {
-        trackedProviderIDs.contains(provider) &&
+        isSupportedByLoginMethod(provider) && provider.isEnabledInBuild && trackedProviderIDs.contains(provider) &&
             states[provider]?.isToolInstalled != false
     }
 
     func availableMenuBarItems(
         for provider: ProviderID
     ) -> [MenuBarItemID] {
-        guard trackedProviderIDs.contains(provider),
+        guard isSupportedByLoginMethod(provider), provider.isEnabledInBuild, trackedProviderIDs.contains(provider),
               states[provider]?.isToolInstalled != false else {
             return []
         }
@@ -225,7 +260,7 @@ final class UsageStore {
         displayMode: UsageDisplayMode = .used
     ) -> [MenuBarReading] {
         items.compactMap { item in
-            guard trackedProviderIDs.contains(item.provider),
+            guard item.provider.isEnabledInBuild, trackedProviderIDs.contains(item.provider),
                   let state = states[item.provider],
                   state.isToolInstalled != false,
                   let value = state.snapshot?.menuBarValue(
@@ -240,7 +275,8 @@ final class UsageStore {
                 metric: item.metric,
                 value: value,
                 displayMode: displayMode,
-                isStale: state.isStale
+                isStale: state.isStale,
+                isXSubscription: state.snapshot?.xSubscription != nil
             )
         }
     }
@@ -250,7 +286,7 @@ final class UsageStore {
         displayMode: UsageDisplayMode = .used
     ) -> [MenuBarProviderReadings] {
         configurations.compactMap { configuration in
-            guard trackedProviderIDs.contains(configuration.provider),
+            guard configuration.provider.isEnabledInBuild, trackedProviderIDs.contains(configuration.provider),
                   let state = states[configuration.provider],
                   state.isToolInstalled != false else {
                 return nil
@@ -283,7 +319,8 @@ final class UsageStore {
             return MenuBarProviderReadings(
                 provider: configuration.provider,
                 selectedMetrics: configuration.metrics,
-                readings: readings
+                readings: readings,
+                isXSubscription: states[configuration.provider]?.snapshot?.xSubscription != nil
             )
         }
     }
@@ -324,6 +361,8 @@ final class UsageStore {
             switch fetchResult.result {
             case .success(let snapshot):
                 state.snapshot = snapshot
+                history.record(snapshot)
+                alertController?.receive(snapshot)
                 state.failure = nil
                 successfulDates.append(snapshot.fetchedAt)
             case .failure(let failure):

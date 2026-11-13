@@ -11,9 +11,12 @@ final class AppServices {
         let preferences = AppPreferences(defaults: defaults)
         self.preferences = preferences
         store = UsageStore(
+            history: UsageHistory.persistent(),
+            analytics: TokenAnalytics(),
             refreshInterval: preferences.refreshInterval,
             trackedProviderIDs: preferences.trackedProviderIDs
         )
+        store.alertController = UsageAlertController(settings: preferences.alerts)
         launchAtLogin = LaunchAtLoginController()
         updateController = UpdateController(startingUpdater: startingUpdater)
     }
