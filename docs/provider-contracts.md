@@ -159,6 +159,23 @@ causes at most one refresh and one retry.
 | Kiro | `~/.aws/sso/cache/kiro-auth-token.json` (or `-cli.json`), then `KIRO_API_KEY` | `q.<region>.amazonaws.com/getUsageLimits` | Credits, Free Trial |
 | Z.ai | `ZAI_API_KEY`, Claude Code `settings.json` pointed at Z.ai, then OpenCode `auth.json` | `GET /api/monitor/usage/quota/limit` on `api.z.ai` or `open.bigmodel.cn` | Session, Weekly, Web Searches |
 
+Copilot tries editor credentials first, then the GitHub CLI config and Keychain
+if a credential is rejected with `401` or a non-rate-limit `403`. Duplicate
+tokens are tried once per fetch; fallback Keychain reads are deferred until
+needed. Rate limits, network errors, server failures, and response parsing errors
+do not trigger credential fallback. A final `403` reports an access/permissions
+problem rather than asserting that the token expired. Credentials are never
+removed or rewritten by this fallback.
+
+On macOS, Cursor SQLite credentials prefixed with `cursor-safe-storage:v1:`
+are Electron safeStorage values. AI Usage decrypts the Chromium `v10` envelope
+in memory using the existing `Cursor Safe Storage` Keychain password (PBKDF2
+SHA-1, 1003 iterations, AES-128-CBC). It never creates or replaces that key.
+Refreshed access tokens retain the encrypted SQLite format; legacy plaintext
+and token-specific Keychain credentials remain supported. Missing or denied
+Keychain access and invalid envelopes report storage errors, not expired sessions.
+No plaintext credentials are logged or written to temporary files.
+
 Cursor, Antigravity, and Grok refresh expiring access tokens using the refresh
 credential already stored by the corresponding tool. Kiro does the same, but
 only with the client registration Kiro itself stored. Refreshed tokens are
@@ -281,3 +298,375 @@ Temporary network failures, `429`, server errors, denied Antigravity quota, and
 invalid response shapes preserve the last-good in-memory snapshot and mark it
 stale. Authentication and storage failures clear that provider's snapshot.
 Every `Retry-After` is honored for at most an hour.
+
+## Gemini native app
+
+Gemini defaults to the explicit `nativeApp` credential source. Settings permits
+Gemini app, Edge Default, or Chrome Default. Each source has separate consent;
+there is no automatic native/browser or cross-account credential fallback.
+The card shows the selected credential source and, for native, its active
+account email. That label is UI-only and is never logged.
+
+Native credential discovery was verified against Gemini.app 1.135.1.1291:
+
+- Root: `~/Library/Application Support/com.google.GeminiMacOS`.
+- Read `account_config` protobuf field 4 for the active local `userN` directory.
+  Accept only that directory-name format; never scan other accounts for a token.
+- Read only `Data/<active>/auth` and Keychain service `Gemini Safe Storage`,
+  account `Gemini Keys`. `/usr/bin/security -w` represents its binary Keystore
+  protobuf as hexadecimal. Match credentials key ID 1 and the envelope version.
+- The auth envelope starts with two little-endian `0xcafeba2e` values and a
+  little-endian uint32 preamble length. DataPreamble fields are key ID (1), key
+  version (2), data format (3), nonce (4), and ciphertext length (5). Format 1
+  is AES-256-GCM with a 12-byte nonce, a trailing 16-byte tag, and no AAD.
+- StoredCredentialData fields used are email (2), refresh token (4), and ID
+  token (8). The ID token audience chooses the installed app's public OAuth
+  client ID. Read the client config from the installed executable, require that
+  audience to be present, and require an unambiguous valid client-secret marker.
+  Version 1.135 ships the 35-byte public installed-app secret XOR 0x5a. It is
+  not copied into source or logged. A changed binary layout fails explicitly.
+
+Use POST `https://oauth2.googleapis.com/token` with the native client config,
+refresh grant, and `https://www.googleapis.com/auth/assistant` scope. Gemini's
+`gemini` scope alone is insufficient for this native quota RPC. Then POST an
+empty protobuf request to:
+
+`https://robinfrontend-pa.googleapis.com/$rpc/assistant.mobile.robin.RobinService/GetUsageInfo`
+
+Use Bearer authorization and `application/x-protobuf`. This backend does not
+accept JSON/JSPB for the service. GetUsageInfoResponse field 3 repeats Usage
+records: field 1 is pool type (1 = five-hour, 2 = weekly); field 2 is GxuPool.
+GxuPool field 1 is the reset Timestamp (seconds 1, nanos 2); field 2 is a float32
+used fraction. Missing fractions remain absent. Native tier enums are not
+mapped to plan names until their meaning is independently verified.
+
+The access-token cache is memory-only, expires with a 60-second safety margin,
+and is bound to the native client ID and refresh credential. Each fetch reloads
+the active account; account changes invalidate token reuse. Only a 401 triggers
+one refresh/retry. Browser cookies, native auth files, and Keychain entries are
+never rewritten; no tokens are persisted in the tracker. Both native hosts are
+allowlisted and all redirects are refused. Native access requires the separate
+`geminiNativeAccessAllowed.v1` setting.
+
+Live native OAuth, quota parsing, cache reuse, and Antigravity comparison were
+verified locally on 2026-11-11. Regression fixtures contain only independently
+generated fake credentials and ciphertext. These are private Google app formats
+and can change; native means the active app's account, not a guarantee that its
+internal API will never change.
+
+## Gemini web/app fallback
+
+This provider reads the Gemini **web/app** usage meter, not Gemini CLI,
+Antigravity, or Gemini API quota. The card is `Gemini`; its source label identifies the chosen browser.
+
+Credential access is opt-in and separate for Chrome Default
+(`geminiChromeCookiesAllowed.v1`) and Edge Default (`geminiEdgeCookiesAllowed.v1`).
+Both default to false. Provider tracking, source selection, and credential
+consent are separate settings. Default profiles are supported; the macOS default
+browser does not change the selected source. Read-only SQLite queries select exactly `__Secure-1PSID`
+and optional `__Secure-1PSIDTS` at `.google.com`. Encrypted values use the existing
+selected browser’s `Chrome Safe Storage` or `Microsoft Edge Safe Storage` Keychain password and macOS Chromium OSCrypt v10. For
+cookie schema v24+, the SHA-256 host prefix is verified and removed. Nothing
+is copied to temporary storage or written back to the browser. Chat content,
+history, and other cookies are not read.
+
+The authenticated GET endpoint is:
+
+`https://gemini.google.com/_/BardChatUi/graphql/schemas/GEMINI_WEB_GRAPHQL/executeQuery`
+
+The UsagePageQuery signature is
+`2/dWbCvkVB0X16r9NPnxifeOAAqdCqMf0xeWvau9yPy7g=`. Variables request the
+`GEMINI_USAGE_SETTINGS_UPGRADE_BANNER` entrypoint and empty Workspace surface
+recommendations. This undocumented contract was cross-checked with
+[CodexBar's Gemini web implementation](https://github.com/steipete/CodexBar/blob/7447bc77c2497323d9c41e40164ce705533493c8/Sources/CodexBarCore/Resources/Plugins/gemini-web.ts).
+The client allows HTTPS requests only to `gemini.google.com`, refuses all
+redirects, uses ephemeral URLSession storage, and never logs request cookies.
+
+After stripping Google's XSSI prefix, read
+`data.viewer.rpcs.getUsageInfo.pools`. `GXU_FIVE_HOURLY` maps to Session and
+`GXU_WEEKLY` to Weekly. `percentageUsed` is a fraction (multiply by 100);
+`gxu.windowRefreshesAt` supplies each reset. Missing/null/invalid meters stay
+absent, never 0% or 100%. Only `subscriptionTier == TIER1` is currently mapped
+to Google AI Pro; unknown tier enums remain unnamed. Null viewers, auth
+redirects, and HTML sign-in pages require web sign-in. A 429 remains rate
+limited and 5xx remains transient; schema changes report invalidResponse.
+
+Google's current product documentation distinguishes these entitlements:
+
+- [Gemini web/app](https://support.google.com/gemini/answer/17004136?hl=en)
+  uses compute-based five-hour and weekly limits.
+- [Antigravity](https://www.antigravity.google/docs/plans) has its own
+  baseline quota and weekly limits; Google One describes its baseline as
+  [specific to Antigravity](https://support.google.com/googleone/answer/14534406?hl=en).
+  Neither implementation treats web and Antigravity meters as interchangeable.
+- [Gemini CLI consumer migration](https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/):
+  AI Pro/Ultra and free individual access stopped on June 18, 2026 in favor
+  of Antigravity CLI. Enterprise and paid API-key modes remain separate.
+  A Gemini API key is not a credential for the web subscription usage meter.
+
+Live verification status is recorded in the local task, not inferred from
+fixture tests. The GraphQL signature and schema may change independently of
+this app's releases.
+
+
+### X Subscription (unified Cursor account)
+
+The Cursor adapter keeps its persisted provider ID so tracking, order and menu selections survive.
+On `GetPlanInfo.isMerged == true` (or a weekly plan confirmed by `isUnified`), the same card becomes
+**X Subscription**, including Settings and the menu bar. Legacy accounts retain a single Cursor card.
+There is no second X card and no duplicate independent Cursor pool.
+
+Credential: existing Cursor native SQLite safeStorage token. Derive the user from its JWT subject
+and send `WorkosCursorSessionToken=<user>%3A%3A<token>` only to these read-only Cursor dashboard routes:
+- GET `/api/dashboard/v2/usage-status?scope=user`
+- POST `/api/dashboard/get-sand-usage-status` with `{}`
+
+The HTTP client disables cookies/cache, restricts HTTPS hosts to cursor.com/api2.cursor.sh, and rejects redirects.
+`weeklyIncludedUsage.usedCents / budgetCents` gives the shared weekly percentage; use current period dates.
+Product breakdown is shown only if all valid entries sum to total within one cent. Unknown product identifiers
+remain literal (e.g. `grok-tasks`); they are not guessed to be Cursor or independent quotas.
+`monthlyUsage.usedCents / limitCents` supplies Additional Usage with its own reset and enabled flag;
+`creditsUsedCents` is not added. Missing/expired monthly data is unavailable, never the old RPC's false zero.
+`prepaidAvailableCents` is a separate USD balance. Included cents are quota weights, not cash balance.
+`resetCounter` is not mapped to available reset inventory. Old menu metric selections resolve to the weekly
+pool for compatibility; the dashboard renders it once.
+
+Verified live through the actual Swift provider on 2026-11-12: unified weekly window, current Additional
+Usage, and prepaid balance all present. Synthetic regression tests cover legacy behavior, unavailable billing,
+expired periods, incomplete breakdown, native identity cookie and endpoint restriction.
+
+
+### Shared quota labels and scoped credits (2026-11-12)
+
+- Claude card is named Claude: subscription limits apply across Chat and Code. Credential service names and stored IDs remain unchanged.
+- Codex retains its product name and explicitly describes shared Codex/ChatGPT Work allowance. Do not label all ordinary ChatGPT chat as included before account-specific rollout evidence. Official announced broader sharing starts December 2026.
+- Antigravity `3p-*` buckets are labelled Third-party, not Claude. They are not the user's direct Anthropic subscription quota.
+- Gemini and Antigravity remain separate baseline quota cards; neither duplicates an invented Google AI Pro master quota or AI credit balance.
+- Copilot credits_used is displayed per returned Chat/Completions/Premium bucket, never summed or converted to USD. has_quota=false buckets are omitted. Missing credit values are not zero; invalid numbers are ignored. Included budget/actual extra spending are not inferred from credits_used.
+- Live Copilot Individual response: token_based_billing true, Chat credits_used 0, Completions credits_used 138, Premium has_quota false. This does not prove the two bucket counters are disjoint.
+- Live Codex Plus response: five-hour/weekly rate limits; additional_rate_limits/code_review_rate_limit null, model availability but no product split, no monetary spend limit. Banked resets available_count=1 but applicable_available_count=0; the UI now distinguishes banked inventory from resets usable now.
+
+
+### Google AI presentation group
+
+Gemini and Antigravity render inside one Google AI card, anchored at the first visible Google product
+in saved order. They retain independent provider IDs, authentication, fetch/error/stale state and menu metrics.
+Each child keeps its actual plan/account/source. A shared header plan badge is allowed only when both
+nonempty account labels and plan names match; plan-name equality alone is not identity evidence.
+Settings groups the two product rows under Google AI and keeps separate tracking and metric controls.
+Menu accessibility labels explicitly qualify Google AI plus the selected product. There is no averaged
+Google percentage, synthetic shared quota or duplicated AI credit wallet. One disabled/uninstalled product
+is omitted without hiding the other. One failing product cannot discard the other's last valid quota.
+
+X breakdown rechecked live on 2026-11-12: backend still returned grok-tasks=324 and grok-chat=29,
+matching shared usedCents=353. No Cursor-specific entry was returned. This is not evidence of zero Cursor
+usage, and grok-tasks is not relabelled Cursor without a verified product mapping.
+
+
+### Live cross-credential experiment (2026-11-12)
+
+Tested Gemini-native first, Antigravity-native second, without altering installed app connections or
+persisting access/refresh tokens. Temporary credential-reading XCTest probes were removed afterwards.
+
+- Gemini native refresh with assistant only: Gemini usage HTTP 200 (2 quota windows), Antigravity
+  production/daily plan and quota APIs HTTP 403 ACCESS_TOKEN_SCOPE_INSUFFICIENT.
+- Gemini native refresh with its existing grants or cloud-platform: Antigravity production/daily plan
+  and quota APIs HTTP 200, 4 quota windows. No new interactive grant was requested.
+- Antigravity native refresh with its existing grants: Antigravity plan/quota HTTP 200, Gemini usage HTTP 403.
+- Antigravity native refresh requesting assistant: token endpoint HTTP 403 restricted_client.
+- Final minimal-scope test: ONE access token refreshed from Gemini native credentials with exactly
+  assistant + cloud-platform successfully fetched Gemini session/weekly (2 windows), and Antigravity
+  Gemini session/weekly + third-party session/weekly (4 windows), plan Google AI Pro.
+
+Thus one Gemini native credential source and one in-memory scoped access token can serve both providers
+on the tested account. Two quota APIs remain necessary; the pools remain independent. This is a live
+feasibility result, not yet an installed production connection change or a universal guarantee for other accounts.
+Result metadata only: /tmp/google-combined-credential-result.json; no credentials in that report.
+
+
+### Production shared Google AI connection (supersedes separate native logins)
+
+Default UsageStore now constructs one GoogleAISession and injects it into GeminiNativeProvider and
+GoogleAIAntigravityProvider. The active Gemini native credential refreshes ONE access token with exactly
+assistant + cloud-platform. Concurrent consumers share an in-flight refresh. Token/refresh credentials
+are never persisted by this session. Each read rechecks consent and active account; mismatched account
+responses are rejected. A 401 can renew once; an old rejection cannot invalidate a newer token.
+Antigravity requests use a redirect-blocked, HTTPS host-restricted client, with the native client metadata.
+There is NO fallback to Antigravity Keychain/cache/loopback or browser login in this production path.
+Legacy adapters remain available in source for compatibility/tests but are not instantiated by default.
+
+Google AI Settings is one row: master Track and Menu Bar switches, product-qualified quota checkboxes
+on the right, and one native credential permission. Saved provider/metric IDs remain intact. Browser
+alternatives are no longer offered by the shared connection settings. The badge appears at the Google AI
+header; embedded product headers have no plan badges. A known plan from one product can label the group
+only when all displayed account identities agree; unknown Gemini native tier is never guessed.
+
+Live final production-session test passed: simultaneous Gemini (2 windows) and Antigravity (4 windows),
+same account, one OAuth refresh, Google AI Pro header. 112 targeted regression tests passed before final
+wiring cleanup. Temporary live credential tests were removed.
+
+
+### X dashboard visualization
+
+Weekly quota remains the primary progress bar. Immediately below it, a stacked product bar visualizes
+shares of consumed weekly usage, with stable colors for grok-tasks, grok-chat and cursor. The legend
+includes zero-valued reported products; an all-zero breakdown uses an empty track and no artificial
+segment widths. Its denominator is consumed usage and does not change with Left/Used mode.
+Additional Usage has its own bounded-spend progress bar, respecting Left/Used mode, and a separate
+monthly reset. Missing or zero spend caps do not create an invented percentage. Prepaid stays a balance.
+
+
+### Unified sections and menu colors (2026-11-12)
+
+One Additional Usage section renders actual monetary spend/cap, a progress bar only when enabled with a
+known positive cap, and optional monetary balance in its header (no standalone prepaid row). Explicit Off
+remains visible, without a progress bar or spending rows; missing data is never inferred to be Off or $0.
+Claude OAuth now exposes typed `spend.used`, `spend.limit`, `spend.balance`: money requires explicit
+amount_minor/currency/exponent. Live account: spend.enabled=false and balance=null, so show Off only.
+Legacy extra_usage is retained as fallback when typed spending is absent. Current Google quota responses
+have no verified monetary balance/spend cap; no synthetic billing or reset inventory is created.
+Codex raw credit balances and their old fixed-rate USD estimate are excluded from panel/menu choices.
+Copilot raw per-bucket credits_used details are no longer populated; percentage quotas remain.
+
+Codex applicable_available_count now lives in UsageResets.usableCount. Its inline presentation can read
+`1 available · 0 usable now`, with existing expiry context; there is no separate usable row. Expiry clamps
+usable counts to remaining banked resets. Claude's existing reset grants remain. X resetCounter is still
+not treated as an inventory. No confirmed banked-reset response exists in the current Google connection.
+
+Panel/menu percentage text shares thresholds: normal below 60% consumed, orange 60–<85, red >=85.
+Left mode severity derives from consumed percentage. The status image is non-template to preserve
+per-number color; icons/labels use appearance-aware label color and rerender on effective appearance
+changes. A pixel-level test verifies simultaneous orange/red rendering. 3rd-party replaces Third-party.
+X share caption is `Share of usage consumed` in primary text; product names are secondary and share
+percentages primary. Both quota and product-share bars are 4px high.
+
+
+### Claude consumed-usage breakdown
+
+Claude OAuth seven_day_breakdown.rows supplies key/display_name/percent for Claude Code, Chats,
+Cowork and Other. These are shares of consumed weekly usage, not independent quotas or share of total
+weekly capacity. The common stacked chart now renders both Claude and X, with 4px bars, secondary
+product names and primary percentage text. Claude places it after Session/Weekly and before Fable.
+Left/Used does not invert attribution shares. Preserve API labels and reported zeros, and reject duplicate
+keys, invalid/partial totals, future or expired/previous-period data. Missing data hides the breakdown.
+Live inspection on 2026-11-12 returned Cowork=100%, the other three=0%; this is backend attribution,
+not an inference about which desktop/CLI client ran the request. No new credential or endpoint is needed.
+
+
+### Display preference update (latest, 2026-11-12)
+
+Claude breakdown claude_code is labelled Code. Claude quota order is Session/Weekly, then Fable,
+then other scoped quotas, followed by consumed-usage breakdown. Additional Usage is hidden when
+explicitly Off or when no meaningful monetary spend/cap/positive balance is reported. This supersedes
+the earlier show-Off-row rule. Codex with no credits has no Additional Usage section; raw credit
+counts and estimated dollar conversions remain hidden.
+
+
+### Card separator rule (2026-11-12)
+
+Render only one horizontal divider at the boundary between quota/share content and monetary/reset
+content, and only when both sides contain visible data. Quota cells, scoped quota rows, consumed-share
+charts and Google product subsections have no internal dividers. Google subsections use spacing instead.
+Banked reset inventories currently come from Claude and Codex; X resetCounter is not treated as inventory.
+
+
+### Latest layout refinements
+
+Google AI retains one horizontal divider between Gemini and Antigravity. Its plan badge strips the
+redundant Google AI prefix (e.g. Pro). Consumed-share legends/segments omit exact zero entries while
+preserving positive values even when rounded display is 0.0%. Raw attribution remains intact. The panel
+maximum height is now 100% of the active screen's visibleFrame, with overflow scrolling as before.
+
+
+### Native Settings window
+
+The gear button and Settings menu open a reusable titled NSWindow, not a settings route inside the
+status-item popover. Opening Settings closes the usage popover and activates the app; reopening brings
+the existing settings window forward. Standard close/minimize controls and Window menu Cmd-W/Cmd-M
+are available. The obsolete back-to-Usage header is hidden in the window. Settings retain shared live
+preferences, fixed readable width, vertical resizing and overflow scrolling. Closing Settings does not
+stop polling or close the menu-bar app. The controller closes/releases its window during shutdown.
+Window lifecycle and light/dark layout tests passed; old 500px/nine-provider layout assertions were
+updated to match the previously authorized full-height dashboard and current provider grouping.
+
+
+### Fixed Settings design size (supersedes resizing)
+
+Settings uses a fixed 560x640-point content area, clamped vertically only when the active screen cannot
+fit it. Resizable style is removed, min/max content sizes match, and the zoom button is hidden.
+Overflow stays inside the existing scroll fallback; users move/close/minimize the window without resizing it.
+
+
+### Lightweight arrowless dashboard (supersedes NSPopover/glass)
+
+The usage surface is now one lazily created borderless UsagePanel, not NSPopover, so it has no native
+arrow. The NSPanel/NSHostingController are reused across opens and released on controller shutdown.
+Frame/visibility changes and native window transitions use no animation. Dashboard/cards/badges/footer
+and Settings use solid appearance-aware backgrounds instead of Liquid Glass/material containers.
+Settings remains a separate fixed-size 560x640 window (screen-clamped), with zoom/resize disabled.
+
+Outside-click monitors exist only while the panel is visible, and are removed on dismissal. Escape,
+local/global outside clicks and key resignation dismiss the panel; clicking the status item toggles it.
+Panel placement is anchored to its status button and clamped to that screen's full visible frame.
+Visible data/order changes remeasure the existing host; hidden changes do not trigger panel sizing.
+
+Cached quota/reset timers use UsageMinuteSchedule: one initial value and no periodic entries while
+hidden. Hidden refresh/status spinners and relative footer time are also paused. Provider polling stays
+active for the menu bar, and opening the panel does not add a separate fetch loop. Unchanged menu-bar
+readings reuse their existing image; effective appearance changes still force recoloring.
+Regression tests verify reuse, no animation, Escape/outside click dismissal, hidden schedule behavior,
+fixed Settings, and light/dark layouts. These are structural resource reductions; no RAM/CPU percentage
+benchmark was claimed.
+
+
+### CPU redraw feedback-loop fix (2026-11-12)
+
+Live AI Usage PID 54862 sustained 98.5% CPU. sample showed NSStatusItem replication/drawing plus
+MenuBarController.start effectiveAppearance KVO tasks repeatedly forcing updateStatusItem. AppKit emits
+appearance invalidations during status-item replication even without a real light/dark change; forcing
+button.image assignment from every notification created a redraw → KVO → redraw feedback loop.
+
+Status image updates now compare both actual readings and resolved aqua/dark/high-contrast appearance,
+recording the rendered key before assigning the image. Unchanged notifications do not replace the image.
+Regression sends 1,000 same-appearance notifications and also lets native queued callbacks settle while
+asserting image identity remains stable. Genuine appearance changes still invalidate the render cache.
+24 relevant tests passed; Release installed and signature/binary verified.
+
+Post-fix installed PID 83820: after 8s startup settling, 7 ps samples over 12.09s were all 0.0% CPU;
+CPU-time delta was 0.01s (~0.083% average). A new 3s sample showed the main thread waiting in mach_msg,
+not redrawing. This is an idle measurement, not a claim that active refresh/render CPU is always zero.
+Metadata: /tmp/aiusage-cpu-fix-measurement.json; before/after stacks: /tmp/aiusage-highcpu-sample.txt and
+/tmp/aiusage-fixed-cpu-sample.txt. No credentials were logged in these diagnostics.
+
+
+### Status-item presentation fix (2026-11-12)
+
+Dashboard presentation no longer depends on NSStatusBarButton.window, which can be absent for a
+replicated status item. Capture a source rect when valid, otherwise anchor from the actual mouse click
+and its NSScreen. Keep that context during visible relayout. Start the cached panel with a nonzero frame.
+Actual NSStatusBarButton actions defer presentation until the current tracking turn unwinds. UsagePanel
+is nonactivating and does not call NSApplication.activate; Settings still activates normally.
+Transient windowDidResignKey no longer dismisses a newly opening panel. Outside click/Escape and an
+actual foreground-app switch handle dismissal. Ignore old global mouse events preceding monitor install,
+and distinguish missing event windows from a real status-item window. Logging category panel records
+only toggle/presentation/dismissal state, not quota credentials or conversations.
+
+Native regression uses NSApplication.sendAction with the actual status button target/selector, waits for
+focus settling, and checks window visibility plus nonzero hosting-view bounds, close/reopen and cache reuse.
+The original outside-click test used window number 0, which can resolve to the current key panel; it now
+uses a distinct real AppKit window. CPU appearance-loop regression remains enabled and passes.
+
+
+Installed presentation-fix verification: user confirmed the real status-item click now opens the panel.
+App log for PID 94993 recorded toggle and Panel presented: visible=true. After the brief opening-render
+spike, a 6.01s follow-up interval had 0.00 CPU seconds and ps showed 0.0%; no sustained redraw loop.
+
+
+### Settings Dock visibility and upstream updater (2026-11-12)
+
+Opening Settings promotes the app to regular activation policy (Dock and Cmd-Tab), restores a minimized Settings window and activates it. Closing Settings restores accessory policy; a Dock reopen restores Settings. The window remains fixed-size and reused. The Star on GitHub footer link is removed. The updater itself is unchanged: Sparkle checks the signed upstream burakgon appcast at startup and on its 24-hour schedule, and the Settings action opens Sparkle's interactive update check. Automatic installation is disabled in Info.plist; this is still an upstream feed, not a fork build updater.
+
+
+### Collapsed provider cards (2026-11-12)
+
+Cards start collapsed and show only the first quota-grid row. The disclosure chevron is immediately to the right of the provider name; the name and chevron toggle together without animation. Expanding restores secondary quota rows, consumption share, billing and reset inventory. A card without additional details has no meaningless disclosure control. Google AI expands as one group; collapsed it shows only its first displayed product's primary quota row, while expanded it shows all available Google products. Cached SwiftUI state preserves user choices during the running app session; expansion does not trigger usage fetches. Natural-height invalidation resizes the existing native panel and its NSScrollView viewport.

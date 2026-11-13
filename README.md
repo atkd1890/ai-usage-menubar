@@ -43,7 +43,7 @@ your tools already have, so there is nothing to set up.
   analytics, no servers of ours, no usage history.
 - **Light.** Measured at 0.0% CPU between refreshes. The panel is released as
   soon as it closes.
-- **Native.** SwiftUI and Liquid Glass in light and dark, with signed automatic
+- **Native.** SwiftUI with lightweight opaque surfaces in light and dark, with signed automatic
   updates.
 
 ## Supported tools
@@ -107,6 +107,25 @@ time.
   clamped to `0...100`, and a remaining percentage never goes below zero.
 
 </details>
+
+## Gemini usage (local fork)
+
+Gemini defaults to the **Gemini native app**. It follows the active account in
+Gemini.app, uses that app's local auth and Keychain, and reads the five-hour and
+weekly usage meters directly from Google's native quota RPC. Enable **Use Gemini
+app login** in Settings. Tokens remain in memory; native auth files and Keychain
+are never rewritten. The card shows the source and account being measured.
+
+Settings also lets you explicitly select Edge Default or Chrome Default, with
+separate cookie consent for each. Browser sessions are never used as an automatic
+fallback for a native account. The macOS default browser does not determine the
+chosen source. No chats or browser history are read. All Gemini requests are
+restricted to their first-party hosts and redirects are refused.
+
+Gemini app quota and Antigravity quota are separate meters. Gemini CLI running
+with an API key is a different product mode and is not represented by either
+subscription meter. See [the provider contract](docs/provider-contracts.md#gemini-native-app)
+and [credential source audit](docs/credential-sources.md).
 
 ## Privacy
 
