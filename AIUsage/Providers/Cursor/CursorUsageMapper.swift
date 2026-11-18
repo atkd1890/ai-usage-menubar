@@ -30,10 +30,13 @@ enum CursorUsageMapper {
         let reset = ProviderParsing.date(body["billingCycleEnd"])
         var windows: [QuotaWindow] = []
         if let percent = totalPercent(planUsage) {
+            let counts = totalCounts(planUsage)
             windows.append(QuotaWindow(
                 kind: .totalUsage,
                 usedPercent: clamp(percent),
-                resetsAt: reset
+                resetsAt: reset,
+                remainingCount: counts?.remaining,
+                limitCount: counts?.limit
             ))
         }
         if let percent = ProviderParsing.double(
@@ -124,6 +127,20 @@ enum CursorUsageMapper {
                 ProviderParsing.double(planUsage["remaining"]) ?? limit
             ))
         return spent / limit * 100
+    }
+
+    private static func totalCounts(
+        _ planUsage: [String: Any]
+    ) -> (remaining: Double, limit: Double)? {
+        guard let limit = ProviderParsing.double(planUsage["limit"]), limit > 0 else {
+            return nil
+        }
+        let remaining = ProviderParsing.double(planUsage["remaining"])
+            ?? ProviderParsing.double(planUsage["totalSpend"]).map { max(limit - $0, 0) }
+        guard let remaining, remaining >= 0 else {
+            return nil
+        }
+        return (remaining: remaining, limit: limit)
     }
 
     private static func planName(_ response: HTTPResponse?) -> String? {

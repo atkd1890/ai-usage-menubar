@@ -47,16 +47,16 @@ struct ProviderSectionView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 5)
+                    .padding(.horizontal, 13)
+                    .padding(.bottom, 3.5)
             }
             if let snapshot = state.snapshot, snapshot.hasPanelContent {
                 let ordered = ProviderDetailsLayout.windows(snapshot, expanded: true)
                 let windows = part == .summary ? Array(ordered.prefix(2)) : part == .details ? Array(ordered.dropFirst(2)) : ProviderDetailsLayout.windows(snapshot, expanded: showsDetails)
                 if !windows.isEmpty {
                     QuotaGrid(windows: windows, displayMode: displayMode)
-                        .padding(.horizontal, 10)
-                        .padding(.bottom, 6)
+                        .padding(.horizontal, 6)
+                        .padding(.bottom, 4.5)
                 }
                 if part == .details || (part == .all && showsDetails) {
                     if !snapshot.consumptionShares.isEmpty {
@@ -65,22 +65,26 @@ struct ProviderSectionView: View {
                     if (!snapshot.windows.isEmpty || !snapshot.consumptionShares.isEmpty) &&
                         (snapshot.hasAdditionalUsageSection || (snapshot.resets?.availableCount ?? 0) > 0 || !snapshot.usageDetails.isEmpty) {
                         Divider()
-                            .padding(.horizontal, 20)
-                            .padding(.top, 2)
-                            .padding(.bottom, 10)
+                            .padding(.horizontal, 16)
+                            .padding(.top, 1.5)
+                            .padding(.bottom, 7.5)
                     }
                     if snapshot.hasAdditionalUsageSection {
                         AdditionalUsageSection(snapshot: snapshot, displayMode: displayMode)
                     }
                     ForEach(snapshot.usageDetails) { detail in
-                        HStack(alignment: .firstTextBaseline) {
-                            Text(detail.title).foregroundStyle(.secondary)
-                            Spacer(minLength: 8)
-                            Text(detail.value).monospacedDigit().multilineTextAlignment(.trailing)
+                        if detail.id.hasSuffix(".credits") {
+                            AdditionalCreditsRow(title: detail.title, value: detail.value)
+                        } else {
+                            HStack(alignment: .firstTextBaseline) {
+                                Text(detail.title).foregroundStyle(.secondary)
+                                Spacer(minLength: 8)
+                                Text(detail.value).monospacedDigit().multilineTextAlignment(.trailing)
+                            }
+                            .font(.caption)
+                            .padding(.horizontal, 13)
+                            .padding(.bottom, 6)
                         }
-                        .font(.caption)
-                        .padding(.horizontal, 14)
-                        .padding(.bottom, 8)
                     }
                     if let resets = snapshot.resets, resets.availableCount > 0 {
                         ResetsRow(resets: resets)
@@ -93,8 +97,8 @@ struct ProviderSectionView: View {
                 )
             } else if part != .details, let failure = state.failure {
                 FailureRow(failure: failure)
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 14)
+                    .padding(.horizontal, 13)
+                    .padding(.bottom, 12)
             } else if part != .details {
                 ProviderStatusRow(
                     message: "No quota data yet.",
@@ -108,8 +112,8 @@ struct ProviderSectionView: View {
                     .foregroundStyle(UsagePalette.warning)
                     .fixedSize(horizontal: false, vertical: true)
                     .help(failure.message)
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 12)
+                    .padding(.horizontal, 13)
+                    .padding(.bottom, 9)
             }
         }
     }
@@ -147,15 +151,15 @@ struct ProviderSectionView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
+                    .padding(.vertical, 2.5)
                     .background(.primary.opacity(0.06), in: Capsule())
                     .accessibilityLabel("Plan \(plan)")
                     .fixedSize(horizontal: true, vertical: false)
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.top, 10)
-        .padding(.bottom, 6)
+        .padding(.horizontal, 13)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
     }
 }
 
@@ -271,9 +275,9 @@ private struct BillingUsageRow: View {
                 .minimumScaleFactor(0.75)
         }
         .font(.caption)
-        .frame(maxWidth: .infinity, minHeight: 24)
-        .padding(.horizontal, 14)
-        .padding(.bottom, 8)
+        .frame(maxWidth: .infinity, minHeight: 22)
+        .padding(.horizontal, 13)
+        .padding(.bottom, 6.5)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(presentation.title)
         .accessibilityValue(presentation.accessibilityValue)
@@ -390,9 +394,9 @@ private struct ResetsRow: View {
                 .minimumScaleFactor(0.75)
             }
             .font(.caption)
-            .frame(maxWidth: .infinity, minHeight: 24)
-            .padding(.horizontal, 14)
-            .padding(.bottom, 8)
+            .frame(maxWidth: .infinity, minHeight: 22)
+            .padding(.horizontal, 13)
+            .padding(.bottom, 6.5)
             .contentShape(Rectangle())
             .help(presentation.helpText)
             .accessibilityElement(children: .ignore)
@@ -423,6 +427,52 @@ private struct QuotaGrid: View {
     }
 }
 
+private struct AdditionalCreditsRow: View {
+    let title: String
+    let value: String
+
+    private var segments: [(label: String, number: String)] {
+        value.components(separatedBy: " · ").compactMap { segment in
+            let parts = segment.split(separator: " ", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { return nil }
+            return (label: parts[0], number: parts[1])
+        }
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(title)
+                .fontWeight(.medium)
+            Spacer(minLength: 8)
+            if segments.isEmpty {
+                Text(value)
+                    .monospacedDigit()
+                    .fontWeight(.medium)
+            } else {
+                HStack(spacing: 4) {
+                    ForEach(Array(segments.enumerated()), id: \.offset) { index, segment in
+                        if index > 0 {
+                            Text("·")
+                                .foregroundStyle(.tertiary)
+                        }
+                        HStack(spacing: 4) {
+                            Text(segment.label)
+                                .foregroundStyle(.secondary)
+                            Text(segment.number)
+                                .monospacedDigit()
+                                .fontWeight(.medium)
+                        }
+                    }
+                }
+            }
+        }
+        .font(.caption)
+        .lineLimit(1)
+        .padding(.horizontal, 13)
+        .padding(.bottom, 6.5)
+    }
+}
+
 private struct QuotaTile: View {
     let window: QuotaWindow
     let displayMode: UsageDisplayMode
@@ -431,12 +481,12 @@ private struct QuotaTile: View {
 
     var body: some View {
         TimelineView(UsageMinuteSchedule(isActive: isPanelVisible)) { context in
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 3) {
                     Text(window.kind.title)
                         .font(.caption.weight(.medium))
                         .lineLimit(1)
-                    Spacer(minLength: 4)
+                    Spacer(minLength: 3)
                     HStack(alignment: .firstTextBaseline, spacing: 3) {
                         Text(percentText)
                             .font(.title3.monospacedDigit().weight(.semibold))
@@ -446,7 +496,6 @@ private struct QuotaTile: View {
                             .foregroundStyle(.secondary)
                     }
                     .lineLimit(1)
-                    .minimumScaleFactor(0.8)
                 }
 
                 GeometryReader { geometry in
@@ -466,21 +515,30 @@ private struct QuotaTile: View {
                 .frame(height: 4)
                 .accessibilityHidden(true)
 
-                if let reset = window.resetsAt {
+                let countText = window.countText(for: displayMode)
+                if window.resetsAt != nil || countText != nil {
                     HStack(spacing: 5) {
-                        Image(systemName: "clock")
-                            .foregroundStyle(.tertiary)
-                        Text(resetText(reset, relativeTo: context.date))
-                            .foregroundStyle(.secondary)
+                        if let reset = window.resetsAt {
+                            Image(systemName: "clock")
+                                .foregroundStyle(.tertiary)
+                            Text(resetText(reset, relativeTo: context.date))
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 4)
+                        if let countText {
+                            Text(countText)
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     .font(.caption2)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .frame(maxWidth: .infinity, minHeight: 60, alignment: .topLeading)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, minHeight: 53, alignment: .topLeading)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(window.kind.title)
             .accessibilityValue(accessibilityValue(relativeTo: context.date))
@@ -545,9 +603,9 @@ private struct ProviderStatusRow: View {
                 .foregroundStyle(.secondary)
         }
         .font(.caption)
-        .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
-        .padding(.horizontal, 14)
-        .padding(.bottom, 10)
+        .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
+        .padding(.horizontal, 13)
+        .padding(.bottom, 8)
     }
 }
 
@@ -615,7 +673,7 @@ private struct ConsumedUsageBreakdown: View {
     private var total: Double { shares.reduce(0) { $0 + $1.percent } }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6.5) {
             Text("Share of usage consumed")
                 .foregroundStyle(.primary)
             GeometryReader { geometry in
@@ -632,7 +690,7 @@ private struct ConsumedUsageBreakdown: View {
             }
             .frame(height: 4)
             .accessibilityHidden(true)
-            WrappingHStack(spacing: 12, lineSpacing: 6) {
+            WrappingHStack(spacing: 12, lineSpacing: 5) {
                 ForEach(visibleShares) { product in
                     HStack(spacing: 4) {
                         Circle().fill(ConsumptionShareColor.color(product.id)).frame(width: 5, height: 5)
@@ -648,8 +706,8 @@ private struct ConsumedUsageBreakdown: View {
             }
         }
         .font(.caption)
-        .padding(.horizontal, 20)
-        .padding(.bottom, 10)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 8)
         .help("Product shares add up to the weekly usage already consumed, not your entire weekly allowance. Shares stay the same in Left and Used modes.")
     }
 }
@@ -671,7 +729,7 @@ struct AdditionalUsageSection: View {
     @Environment(\.usagePanelVisible) private var isPanelVisible
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Additional Usage").fontWeight(.medium)
                 Spacer(minLength: 8)
@@ -718,8 +776,8 @@ struct AdditionalUsageSection: View {
             }
         }
         .font(.caption)
-        .padding(.horizontal, 20)
-        .padding(.bottom, 10)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 8)
         .accessibilityElement(children: .combine)
     }
 }
@@ -743,7 +801,7 @@ enum ProviderDetailsLayout {
         var result: [[QuotaWindow]] = []
         var pair: [QuotaWindow] = []
         for window in windows {
-            if window.kind == .argonWeekly || window.kind.rawValue.hasPrefix("additional:") {
+            if window.kind == .argonWeekly || window.kind.title.count > 20 {
                 if !pair.isEmpty { result.append(pair); pair = [] }
                 result.append([window])
             } else {

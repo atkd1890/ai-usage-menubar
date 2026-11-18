@@ -7,14 +7,17 @@ final class ProviderScopeTests: XCTestCase {
     }
     func testVerifiedCopilotScopedCreditsAreNotSummedOrCalledDollars() throws {
         let result = try CopilotUsageMapper.map(response: response([
-            "copilot_plan": "individual", "token_based_billing": true,
+            "copilot_plan": "individual", "access_type_sku": "free_limited_copilot", "token_based_billing": true,
             "quota_snapshots": [
                 "chat": ["credits_used": 0, "has_quota": true, "percent_remaining": 100, "entitlement": 200],
                 "completions": ["credits_used": 138, "has_quota": true, "percent_remaining": 93.1, "entitlement": 2000],
                 "premium_interactions": ["credits_used": 0, "has_quota": false, "entitlement": 0]
             ]
         ]), now: Date())
+        XCTAssertEqual(result.planName, "Free")
         XCTAssertEqual(result.windows.map(\.kind), [.chat, .completions])
+        XCTAssertEqual(QuotaKind.chat.title, "Chat Monthly")
+        XCTAssertEqual(QuotaKind.completions.title, "Completions Monthly")
         XCTAssertTrue(result.usageDetails.isEmpty)
         XCTAssertFalse(result.availableMenuBarItems.contains { $0.metric == .extraUsage })
         XCTAssertNil(result.billingUsage)
@@ -59,5 +62,10 @@ final class ProviderScopeTests: XCTestCase {
         XCTAssertEqual(QuotaKind.claudePoolWeekly.title, "3rd-party Weekly")
         let gemini = ProviderSnapshot(provider: .gemini, planName: nil, windows: [], fetchedAt: Date())
         XCTAssertEqual(gemini.usageScope, "Gemini app quota · separate from Antigravity")
+        for provider in ProviderID.enabledCases {
+            let subtitle = ProviderSnapshot(provider: provider, planName: nil, windows: [], fetchedAt: Date()).dashboardSubtitle
+            XCTAssertNotNil(subtitle, "\(provider.rawValue) must have a dashboardSubtitle")
+            XCTAssertTrue(subtitle?.contains(" • ") == true, "\(provider.rawValue) subtitle must follow '<Scope> • <Details>'")
+        }
     }
 }

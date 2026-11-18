@@ -69,10 +69,20 @@ enum ZAIUsageMapper {
                   let percent = ProviderParsing.double(limit["percentage"]) else {
                 return nil
             }
+            var remainingCount: Double?
+            var limitCount: Double?
+            if let used = ProviderParsing.double(limit["currentValue"]),
+               let total = ProviderParsing.double(limit["usage"]),
+               total > 0, used >= 0 {
+                remainingCount = max(total - used, 0)
+                limitCount = total
+            }
             return QuotaWindow(
                 kind: kind,
                 usedPercent: min(max(percent, 0), 100),
-                resetsAt: reset
+                resetsAt: reset,
+                remainingCount: remainingCount,
+                limitCount: limitCount
             )
         case "TIME_LIMIT":
             guard let used = ProviderParsing.double(limit["currentValue"]),
@@ -83,7 +93,9 @@ enum ZAIUsageMapper {
             return QuotaWindow(
                 kind: .webSearches,
                 usedPercent: min(max(used / total * 100, 0), 100),
-                resetsAt: reset
+                resetsAt: reset,
+                remainingCount: max(total - used, 0),
+                limitCount: total
             )
         default:
             return nil

@@ -265,7 +265,7 @@ enum MenuBarStatusImageRenderer {
 }
 
 enum AppSurfaceLayout {
-    static let dashboardWidth: CGFloat = 392
+    static let dashboardWidth: CGFloat = 440
     static let settingsWidth: CGFloat = 750
     static let settingsHeight: CGFloat = 640
 }
@@ -945,8 +945,8 @@ final class DashboardPanelView: NSView {
         scrollView.documentView = document
         providerStack.orientation = .vertical
         providerStack.alignment = .leading
-        providerStack.spacing = 8
-        providerStack.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 6, right: 10)
+        providerStack.spacing = 5.5
+        providerStack.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 4.5, right: 10)
         providerStack.translatesAutoresizingMaskIntoConstraints = false
         document.addSubview(providerStack)
         NSLayoutConstraint.activate([

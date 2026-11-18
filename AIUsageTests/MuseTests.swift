@@ -65,6 +65,29 @@ final class MuseTests: XCTestCase {
         XCTAssertTrue(preferences.isTracking(.muse))
         preferences.setTracking(false, for: .muse)
         XCTAssertFalse(AppPreferences(defaults: defaults).isTracking(.muse))
-        XCTAssertEqual(ProviderLoginMethod.supported(for: .muse), [.edge])
+        XCTAssertEqual(ProviderLoginMethod.supported(for: .muse), [.edge, .chrome])
     }
+    func testMuseChromeMethodUsesChromeSessionAndCredentialSource() async throws {
+        let rows = try String(data: JSONSerialization.data(withJSONObject: [
+            ["name": "hatch_sess", "host": ".muse.ai", "value": "chrome-sess", "encrypted": ""],
+            ["name": "hatch_gw", "host": ".muse.ai", "value": "chrome-gw", "encrypted": ""]
+        ]), encoding: .utf8)!
+        let store = WebSessionStore(
+            sqlite: MuseCookieSQLite(rows: rows),
+            keychain: MemoryKeychain(),
+            files: MemoryFiles(["~/Library/Application Support/Google/Chrome/Default/Cookies": ""])
+        )
+        let http = MockHTTPClient([free])
+        let provider = MuseProvider(http: http, method: { .chrome }, sessions: store, pageScripts: { _ in [] }, saveAction: { _ in })
+        let snapshot = try await provider.fetch()
+        XCTAssertEqual(snapshot.credentialSource, "Chrome Default")
+        XCTAssertNotNil(snapshot.historyIdentity)
+        let requests = await http.capturedRequests()
+        XCTAssertEqual(requests.first?.headers["Cookie"], "hatch_gw=chrome-gw; hatch_sess=chrome-sess")
+    }
+}
+private struct MuseCookieSQLite: SQLiteValueReading {
+    let rows: String
+    func queryValue(path: String, sql: String) throws -> String? { sql.contains("FROM meta") ? "24" : rows }
+    func execute(path: String, sql: String) throws { XCTFail("Cookie stores must never be modified") }
 }

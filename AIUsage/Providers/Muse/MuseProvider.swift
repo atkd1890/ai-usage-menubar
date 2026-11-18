@@ -9,24 +9,37 @@ actor MuseProvider: UsageProvider {
     static let verifiedAction = "40e0249eeae158685b6a8d0c3b203f53dd4f2c7d63"
     static let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
     private let http: any HTTPClient
-    private let cookies: @Sendable () throws -> String
+    private let loadCookies: @Sendable () throws -> (cookie: String, sourceLabel: String)
     private let pageScripts: @Sendable (String) async throws -> [String]
     private let saveAction: @Sendable (String) -> Void
     private var action: String
     init(http: any HTTPClient = GeminiReadOnlyHTTPClient(allowedHosts: ["muse.ai"]),
-         cookies: @escaping @Sendable () throws -> String = {
-             try WebSessionStore().cookies(source: .edge, domain: "muse.ai", names: ["hatch_sess", "hatch_gw"])
-         },
+         cookies: (@Sendable () throws -> String)? = nil,
+         method: (@Sendable () -> ProviderLoginMethod)? = nil,
+         sessions: WebSessionStore = WebSessionStore(),
          action: String? = UserDefaults.standard.string(forKey: MuseProvider.actionKey),
          pageScripts: @escaping @Sendable (String) async throws -> [String] = { try await MusePageScripts.load(cookie: $0) },
          saveAction: @escaping @Sendable (String) -> Void = { UserDefaults.standard.set($0, forKey: MuseProvider.actionKey) }) {
-        self.http = http; self.cookies = cookies; self.pageScripts = pageScripts; self.saveAction = saveAction
+        self.http = http
+        if let cookies {
+            self.loadCookies = { (try cookies(), "Edge Default") }
+        } else {
+            let resolveMethod = method ?? { ProviderLoginMethod.selected(for: .muse) }
+            self.loadCookies = {
+                let selected = resolveMethod()
+                let source: WebSessionSource = selected == .chrome ? .chrome : .edge
+                let label = selected == .chrome ? "Chrome Default" : "Edge Default"
+                let header = try sessions.cookies(source: source, domain: "muse.ai", names: ["hatch_sess", "hatch_gw"])
+                return (header, label)
+            }
+        }
+        self.pageScripts = pageScripts; self.saveAction = saveAction
         self.action = action.flatMap { Self.validAction($0) ? $0 : nil } ?? Self.verifiedAction
     }
     func fetch() async throws -> ProviderSnapshot {
-        let cookie = try cookies()
+        let (cookie, sourceLabel) = try loadCookies()
         guard let sessionCookie = cookie.components(separatedBy: "; ").first(where: { $0.hasPrefix("hatch_sess=") && $0.count > "hatch_sess=".count }) else {
-            throw ProviderFailure(.authentication, "Sign in to Muse in Edge Default.")
+            throw ProviderFailure(.authentication, "Sign in to Muse in \(sourceLabel).")
         }
         var response = try await subscription(cookie: cookie, action: action)
         if response.statusCode == 404 || response.header("x-nextjs-action-not-found") == "1" {
@@ -34,7 +47,7 @@ actor MuseProvider: UsageProvider {
             response = try await subscription(cookie: cookie, action: action)
         }
         let fingerprint = Data(SHA256.hash(data: Data(sessionCookie.utf8))).map { String(format: "%02x", $0) }.joined()
-        let value = try Self.map(response, historyID: "muse-session:" + fingerprint)
+        let value = try Self.map(response, historyID: "muse-session:" + fingerprint, credentialSource: sourceLabel)
         saveAction(action)
         return value
     }
@@ -95,9 +108,9 @@ actor MuseProvider: UsageProvider {
         return String(text[range])
     }
     static var changed: ProviderFailure { ProviderFailure(.invalidResponse, "Muse subscription API changed. Refresh to retry compatibility discovery.") }
-    static func map(_ response: HTTPResponse, historyID: String, now: Date = Date()) throws -> ProviderSnapshot {
+    static func map(_ response: HTTPResponse, historyID: String, credentialSource: String = "Edge Default", now: Date = Date()) throws -> ProviderSnapshot {
         if [401, 403].contains(response.statusCode) || (300..<400).contains(response.statusCode) {
-            throw ProviderFailure(.authentication, "Muse session expired. Sign in to Muse in Edge Default.")
+            throw ProviderFailure(.authentication, "Muse session expired. Sign in to Muse in \(credentialSource).")
         }
         if response.statusCode == 429 { throw ProviderFailure(.rateLimited, "Muse usage is rate limited.") }
         guard response.statusCode == 200, response.body.count <= 1_000_000 else { throw changed }
@@ -124,7 +137,7 @@ actor MuseProvider: UsageProvider {
         }
         return ProviderSnapshot(provider: .muse, planName: tier, windows: [QuotaWindow(kind: .weekly, usedPercent: used,
             resetsAt: ProviderParsing.date(usage["resetsAt"]))], billingUsage: billing, fetchedAt: now,
-            credentialSource: "Edge Default", accountLabel: historyID, usageScope: "Product usage • Muse",
+            credentialSource: credentialSource, accountLabel: historyID, usageScope: "Product usage • Muse",
             prepaidBalance: balance, additionalUsageEnabled: billing != nil)
     }
 }

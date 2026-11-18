@@ -5,21 +5,37 @@ final class ConsumerQuotaTests: XCTestCase {
     func testKimiRefreshIsScopedRetriedOnceAndCachedOnlyForSameNativeSession() async throws {
         let subscription = httpResponse(json: #"{"subscription":{"goods":{"title":"Free"}}}"#)
         let stats = httpResponse(json: #"{"subscriptionBalance":{"feature":"FEATURE_OMNI","amountUsedRatio":0}}"#)
-        let http = MockHTTPClient([httpResponse(401), httpResponse(json: #"{"access_token":"new-access","refresh_token":"new-refresh"}"#), subscription, stats, httpResponse(json: "{}"), subscription, stats, httpResponse(json: "{}")])
+        let http = MockHTTPClient([
+            httpResponse(401),
+            httpResponse(json: #"{"access_token":"new-access","refresh_token":"Bearer new-refresh"}"#),
+            subscription, stats, httpResponse(json: "{}"),
+            subscription, stats, httpResponse(json: "{}"),
+            httpResponse(401),
+            httpResponse(json: #"{"access_token":"newer-access","refresh_token":"Bearer newer-refresh"}"#),
+            subscription, stats, httpResponse(json: "{}")
+        ])
         let provider = ConsumerQuotaProvider(id: .kimi, http: http,
             nativeKimi: { KimiNativeSession(access: "old-access", refresh: "old-refresh") }, allowRefresh: { true })
         _ = try await provider.fetch()
         _ = try await provider.fetch()
+        _ = try await provider.fetch()
         let requests = await http.capturedRequests()
-        XCTAssertEqual(requests.count, 8)
+        XCTAssertEqual(requests.count, 13)
         XCTAssertEqual(requests[1].url.absoluteString, "https://www.kimi.ai/api/auth/token/refresh")
         XCTAssertEqual(requests[1].method, .get)
         XCTAssertEqual(requests[1].headers["Authorization"], "Bearer old-refresh")
         XCTAssertNil(requests[1].headers["Cookie"])
-        for request in requests.dropFirst(2) {
+        for request in requests[2..<8] {
             XCTAssertEqual(request.headers["Authorization"], "Bearer new-access")
             XCTAssertFalse(request.headers.values.contains(where: { $0.contains("new-refresh") || $0.contains("old-refresh") }))
         }
+        XCTAssertEqual(requests[9].url.absoluteString, "https://www.kimi.ai/api/auth/token/refresh")
+        XCTAssertEqual(requests[9].headers["Authorization"], "Bearer new-refresh")
+        for request in requests.dropFirst(10) {
+            XCTAssertEqual(request.headers["Authorization"], "Bearer newer-access")
+        }
+        XCTAssertEqual(KimiNativeSession.stripBearer("Bearer abc.def.ghi"), "abc.def.ghi")
+        XCTAssertFalse(KimiNativeSession.valid(KimiNativeSession.stripBearer("invalid token")))
     }
     func testKimiRefreshRequiresConsentAndDoesNotLoop() async {
         for allowed in [false, true] {
@@ -35,22 +51,120 @@ final class ConsumerQuotaTests: XCTestCase {
         let value = try ConsumerQuotaProvider.manus(httpResponse(json: #"{"totalCredits":1300,"freeCredits":1000,"refreshCredits":150,"maxRefreshCredits":300,"nextRefreshTime":"2026-11-14T00:00:00Z"}"#))
         XCTAssertEqual(value.windows.first?.kind, .daily)
         XCTAssertEqual(value.windows.first?.usedPercent, 50)
+        XCTAssertEqual(value.windows.first?.remainingCount, 150)
+        XCTAssertEqual(value.windows.first?.limitCount, 300)
         XCTAssertNotNil(value.windows.first?.resetsAt)
         XCTAssertNil(value.planName)
         XCTAssertNil(value.billingUsage)
+        XCTAssertEqual(value.usageDetails, [
+            ProviderUsageDetail(
+                id: "manus.credits",
+                title: "Additional Credits",
+                value: "Free \(1000.formatted(.number)) · Total \(1300.formatted(.number))"
+            )
+        ])
         XCTAssertThrowsError(try ConsumerQuotaProvider.manus(httpResponse(json: #"{"totalCredits":1300,"freeCredits":1000}"#)))
         XCTAssertThrowsError(try ConsumerQuotaProvider.manus(httpResponse(401)))
+    }
+    func testManusSupportsDesktopAndChromeSessionSources() async throws {
+        let manusResponse = httpResponse(json: #"{"totalCredits":1300,"freeCredits":1000,"refreshCredits":300,"maxRefreshCredits":300,"nextRefreshTime":"2026-11-16T15:00:00Z"}"#)
+        let desktopRows = try String(data: JSONSerialization.data(withJSONObject: [
+            ["name": "session_id", "host": "api.manus.im", "value": "desktop-sess", "encrypted": ""]
+        ]), encoding: .utf8)!
+        let desktopStore = WebSessionStore(
+            sqlite: ConsumerCookieSQLite(rows: desktopRows),
+            keychain: MemoryKeychain(),
+            files: MemoryFiles(["~/Library/Application Support/Manus/Cookies": ""])
+        )
+        let desktopHTTP = MockHTTPClient([manusResponse])
+        let desktopProvider = ConsumerQuotaProvider(id: .manus, http: desktopHTTP, sessions: desktopStore, method: { .desktop })
+        let desktopSnapshot = try await desktopProvider.fetch()
+        XCTAssertEqual(desktopSnapshot.credentialSource, "Manus desktop")
+        XCTAssertNotNil(desktopSnapshot.historyIdentity)
+        let desktopRequests = await desktopHTTP.capturedRequests()
+        XCTAssertEqual(desktopRequests.first?.headers["Authorization"], "Bearer desktop-sess")
+
+        let chromeRows = try String(data: JSONSerialization.data(withJSONObject: [
+            ["name": "session_id", "host": ".manus.im", "value": "chrome-sess", "encrypted": ""]
+        ]), encoding: .utf8)!
+        let chromeStore = WebSessionStore(
+            sqlite: ConsumerCookieSQLite(rows: chromeRows),
+            keychain: MemoryKeychain(),
+            files: MemoryFiles(["~/Library/Application Support/Google/Chrome/Default/Cookies": ""])
+        )
+        let chromeHTTP = MockHTTPClient([manusResponse])
+        let chromeProvider = ConsumerQuotaProvider(id: .manus, http: chromeHTTP, sessions: chromeStore, method: { .chrome })
+        let chromeSnapshot = try await chromeProvider.fetch()
+        XCTAssertEqual(chromeSnapshot.credentialSource, "Chrome Default")
+        XCTAssertNotNil(chromeSnapshot.historyIdentity)
+        let chromeRequests = await chromeHTTP.capturedRequests()
+        XCTAssertEqual(chromeRequests.first?.headers["Authorization"], "Bearer chrome-sess")
+    }
+    func testKimiBrowserMethodsLoadFromLevelDBAndCookieFallback() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        func physical(_ value: Data) -> Data {
+            var checked = Data([1]); checked.append(value)
+            let crc = ScopedLocalStorageReader.crc(checked)
+            var result = Data((0..<4).map { UInt8(truncatingIfNeeded: crc >> ($0 * 8)) })
+            result.append(contentsOf: [UInt8(value.count & 255), UInt8(value.count >> 8), 1]); result.append(value)
+            return result
+        }
+        func batch(sequence: UInt64, token: String) -> Data {
+            var value = Data((0..<8).map { UInt8(truncatingIfNeeded: sequence >> ($0 * 8)) })
+            value.append(contentsOf: [1, 0, 0, 0, 1])
+            var key = Data("_https://www.kimi.ai\0".utf8); key.append(1); key.append(Data("access_token".utf8))
+            value.append(UInt8(key.count)); value.append(key)
+            let raw = Data([1]) + Data(token.utf8); value.append(UInt8(raw.count)); value.append(raw)
+            return physical(value)
+        }
+        try Data("MANIFEST-000001\n".utf8).write(to: dir.appendingPathComponent("CURRENT"))
+        try physical(Data([2, 1])).write(to: dir.appendingPathComponent("MANIFEST-000001"))
+        try batch(sequence: 1, token: "edge-jwt").write(to: dir.appendingPathComponent("000001.log"))
+
+        let edgeSession = try KimiNativeSession.load(
+            method: .edge,
+            includeRefresh: false,
+            localStorageDirectories: [.edge: dir.path]
+        )
+        XCTAssertEqual(edgeSession.access, "edge-jwt")
+        XCTAssertEqual(edgeSession.sourceLabel, "Edge Default")
+
+        let cookieRows = try String(data: JSONSerialization.data(withJSONObject: [
+            ["name": "kimi-auth", "host": ".kimi.ai", "value": "chrome-cookie-jwt", "encrypted": ""]
+        ]), encoding: .utf8)!
+        let chromeStore = WebSessionStore(
+            sqlite: ConsumerCookieSQLite(rows: cookieRows),
+            keychain: MemoryKeychain(),
+            files: MemoryFiles(["~/Library/Application Support/Google/Chrome/Default/Cookies": ""])
+        )
+        let chromeSession = try KimiNativeSession.load(
+            method: .chrome,
+            includeRefresh: false,
+            sessions: chromeStore,
+            localStorageDirectories: [.chrome: dir.appendingPathComponent("missing").path]
+        )
+        XCTAssertEqual(chromeSession.access, "chrome-cookie-jwt")
+        XCTAssertEqual(chromeSession.sourceLabel, "Chrome Default")
     }
     func testKimiUsesMembershipRatioIncludingZeroNotCodeQuotaOrWeekly() throws {
         let subscription = httpResponse(json: #"{"subscription":{"goods":{"title":"Free"}}}"#)
         let value = try ConsumerQuotaProvider.kimi(subscription: subscription,
             stats: httpResponse(json: #"{"subscriptionBalance":{"feature":"FEATURE_OMNI","amountUsedRatio":0,"expireTime":"2026-12-01T00:00:00Z"}}"#))
         XCTAssertEqual(value.planName, "Free")
-        XCTAssertEqual(value.windows.first?.kind, .totalUsage)
+        XCTAssertEqual(value.windows.first?.kind, .monthly)
+        XCTAssertEqual(value.windows.first?.kind.title, "Monthly")
         XCTAssertEqual(value.windows.first?.usedPercent, 0)
         let coding = try ConsumerQuotaProvider.kimi(subscription: subscription,
             stats: httpResponse(json: #"{"subscriptionBalance":{"feature":"FEATURE_CODING","amountUsedRatio":0}}"#))
         XCTAssertEqual(coding.windows.first?.kind.rawValue, "additional:kimi.membership.FEATURE_CODING")
+        let fallbackAndWeekly = try ConsumerQuotaProvider.kimi(
+            subscription: httpResponse(json: #"{"subscription":{"goods":{"title":"Pro"}},"balances":[{"feature":"FEATURE_OMNI","amountUsedRatio":0.25,"expireTime":"2026-12-01T00:00:00Z"}]}"#),
+            stats: httpResponse(json: #"{"ratelimitCode7d":{"amountUsedRatio":0.4,"expireTime":"2026-11-23T00:00:00Z"}}"#)
+        )
+        XCTAssertEqual(fallbackAndWeekly.windows.map(\.kind.rawValue), ["monthly", "additional:kimi.code.7d"])
+        XCTAssertEqual(fallbackAndWeekly.windows.map(\.usedPercent), [25, 40])
         for invalid in ["true", "-1", "1.1", "null"] {
             XCTAssertThrowsError(try ConsumerQuotaProvider.kimi(subscription: subscription,
                 stats: httpResponse(json: "{\"subscriptionBalance\":{\"feature\":\"FEATURE_OMNI\",\"amountUsedRatio\":\(invalid)}}")))
@@ -95,4 +209,9 @@ final class ConsumerQuotaTests: XCTestCase {
         try log.write(to: dir.appendingPathComponent("000003.log"))
         XCTAssertTrue(try reader.read(directory: dir, origin: "https://www.kimi.ai", names: ["access_token"]).isEmpty)
     }
+}
+private struct ConsumerCookieSQLite: SQLiteValueReading {
+    let rows: String
+    func queryValue(path: String, sql: String) throws -> String? { sql.contains("FROM meta") ? "24" : rows }
+    func execute(path: String, sql: String) throws { XCTFail("Cookie stores must never be modified") }
 }

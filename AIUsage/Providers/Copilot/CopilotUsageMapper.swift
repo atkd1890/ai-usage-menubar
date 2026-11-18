@@ -80,12 +80,37 @@ enum CopilotUsageMapper {
 
         return ProviderSnapshot(
             provider: .copilot,
-            planName: planName(body["copilot_plan"]),
+            planName: planName(body["copilot_plan"], accessTypeSKU: body["access_type_sku"]),
             windows: windows,
             fetchedAt: now,
             usageScope: "Account usage · quotas and credits shown separately",
-            usageDetails: notices
+            usageDetails: quotaAllowanceDetails(body) + notices
         )
+    }
+
+    static func quotaAllowanceDetails(_ body: [String: Any]) -> [ProviderUsageDetail] {
+        guard let snapshots = ProviderParsing.object(body["quota_snapshots"]) else {
+            return []
+        }
+        var details: [ProviderUsageDetail] = []
+        for (key, title) in [
+            ("premium_interactions", "Premium requests"),
+            ("chat", "Chat messages"),
+            ("completions", "Code completions")
+        ] {
+            guard let bucket = ProviderParsing.object(snapshots[key]),
+                  bucket["has_quota"] as? Bool != false,
+                  bucket["unlimited"] as? Bool != true else { continue }
+            if let overage = ProviderParsing.double(bucket["overage_count"]),
+               overage.isFinite, overage > 0 {
+                details.append(ProviderUsageDetail(
+                    id: "copilot.\(key).overage",
+                    title: "\(title) overage",
+                    value: "\(Int(overage.rounded()))"
+                ))
+            }
+        }
+        return details
     }
 
     /// Credits belong to the returned bucket. Do not add Chat, Completions and
@@ -110,7 +135,7 @@ enum CopilotUsageMapper {
     ) -> QuotaWindow? {
         guard let bucket = ProviderParsing.object(value), bucket["has_quota"] as? Bool != false else { return nil }
         let entitlement = ProviderParsing.double(bucket["entitlement"])
-        let remaining = ProviderParsing.double(bucket["remaining"])
+        let remaining = ProviderParsing.double(bucket["remaining"]) ?? ProviderParsing.double(bucket["quota_remaining"])
 
         if bucket["unlimited"] as? Bool == true ||
             entitlement == -1 ||
@@ -132,10 +157,13 @@ enum CopilotUsageMapper {
         } else {
             return nil
         }
+        let bucketReset = parseResetDate(bucket["quota_reset_at"]) ?? resetsAt
         return QuotaWindow(
             kind: kind,
             usedPercent: usedPercent,
-            resetsAt: resetsAt
+            resetsAt: bucketReset,
+            remainingCount: remaining,
+            limitCount: entitlement
         )
     }
 
@@ -154,17 +182,29 @@ enum CopilotUsageMapper {
             usedPercent: clampPercent(
                 ((total - remaining) / total) * 100
             ),
-            resetsAt: resetsAt
+            resetsAt: resetsAt,
+            remainingCount: remaining,
+            limitCount: total
         )
     }
 
     private static func resetDate(_ body: [String: Any]) -> Date? {
-        if let date = ProviderParsing.date(body["quota_reset_date"]) {
+        for key in ["quota_reset_date_utc", "quota_reset_date", "limited_user_reset_date"] {
+            if let date = parseResetDate(body[key]) {
+                return date
+            }
+        }
+        return nil
+    }
+
+    private static func parseResetDate(_ raw: Any?) -> Date? {
+        if let number = ProviderParsing.double(raw), (!number.isFinite || number <= 0) {
+            return nil
+        }
+        if let date = ProviderParsing.date(raw) {
             return date
         }
-        guard let value = ProviderParsing.string(
-            body["limited_user_reset_date"]
-        ) else {
+        guard let value = ProviderParsing.string(raw) else {
             return nil
         }
         let formatter = DateFormatter()
@@ -175,7 +215,10 @@ enum CopilotUsageMapper {
         return formatter.date(from: value)
     }
 
-    private static func planName(_ value: Any?) -> String? {
+    private static func planName(_ value: Any?, accessTypeSKU: Any?) -> String? {
+        if ProviderParsing.string(accessTypeSKU)?.lowercased() == "free_limited_copilot" {
+            return "Free"
+        }
         guard let raw = ProviderParsing.string(value)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
               !raw.isEmpty else {

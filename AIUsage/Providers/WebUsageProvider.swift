@@ -33,6 +33,7 @@ actor WebUsageProvider: UsageProvider {
         case .chrome: "Chrome Default"
         case .claudeDesktop: "Claude desktop"
         case .codexDesktop: "Codex desktop"
+        case .manusDesktop: "Manus desktop"
         }
     }
     private func request(_ url: String, cookie: String, token: String? = nil,

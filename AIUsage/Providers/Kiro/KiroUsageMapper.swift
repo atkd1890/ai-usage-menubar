@@ -56,11 +56,14 @@ enum KiroUsageMapper {
             limit > 0 else {
             return nil
         }
+        let used = usage(of: item)
         return QuotaWindow(
             kind: .credits,
-            usedPercent: percent(usage(of: item), of: limit),
+            usedPercent: percent(used, of: limit),
             resetsAt: ProviderParsing.date(item["nextDateReset"]) ??
-                fallbackReset
+                fallbackReset,
+            remainingCount: max(limit - used, 0),
+            limitCount: limit
         )
     }
 
@@ -76,12 +79,15 @@ enum KiroUsageMapper {
               limit > 0 else {
             return nil
         }
+        let used = usage(of: trial)
         return QuotaWindow(
             kind: .freeTrial,
-            usedPercent: percent(usage(of: trial), of: limit),
+            usedPercent: percent(used, of: limit),
             resetsAt: ProviderParsing.date(trial["freeTrialExpiry"]) ??
                 ProviderParsing.date(item["nextDateReset"]) ??
-                fallbackReset
+                fallbackReset,
+            remainingCount: max(limit - used, 0),
+            limitCount: limit
         )
     }
 

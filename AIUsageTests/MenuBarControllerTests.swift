@@ -5,17 +5,17 @@ import SwiftUI
 @MainActor
 final class MenuBarControllerTests: XCTestCase {
     func testNativeDisclosureKeepsSummaryAnchoredThroughoutAnimation() async throws {
-        let window = NSWindow(contentRect: NSRect(x: -10000, y: 0, width: 392, height: 600),
+        let window = NSWindow(contentRect: NSRect(x: -10000, y: 0, width: 440, height: 600),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        let root = NSView(frame: NSRect(x: 0, y: 0, width: 392, height: 600))
+        let root = NSView(frame: NSRect(x: 0, y: 0, width: 440, height: 600))
         let section = NativeProviderSection(frame: .zero)
         section.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(section)
         NSLayoutConstraint.activate([
             section.topAnchor.constraint(equalTo: root.topAnchor, constant: 80),
             section.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 10),
-            section.widthAnchor.constraint(equalToConstant: 372)
+            section.widthAnchor.constraint(equalToConstant: 420)
         ])
         section.makeContent = { part, _, _ in
             AnyView(Color.clear.frame(height: part == .summary ? 70 : 160))
@@ -68,7 +68,7 @@ final class MenuBarControllerTests: XCTestCase {
             preferences: AppPreferences(defaults: defaults), updateController: UpdateController(startingUpdater: false),
             presentation: presentation, openSettings: {}))
         let visible = NSScreen.main!.visibleFrame
-        let panel = NSWindow(contentRect: NSRect(x: -10000, y: visible.maxY - 103, width: 392, height: 103),
+        let panel = NSWindow(contentRect: NSRect(x: -10000, y: visible.maxY - 103, width: 440, height: 103),
                              styleMask: [.borderless], backing: .buffered, defer: false)
         panel.isReleasedWhenClosed = false
         panel.contentView = content
@@ -84,7 +84,7 @@ final class MenuBarControllerTests: XCTestCase {
         let section = NativeProviderSection(frame: .zero)
         section.makeContent = { part, _, _ in AnyView(Color.clear.frame(height: part == .summary ? 70 : 2000)) }
         content.providerStack.addArrangedSubview(section)
-        section.widthAnchor.constraint(equalToConstant: 372).isActive = true
+        section.widthAnchor.constraint(equalToConstant: 420).isActive = true
         section.onHeightChange = { [weak content] in
             DispatchQueue.main.async { content?.onContentSizeChange?() }
         }
@@ -131,7 +131,7 @@ final class MenuBarControllerTests: XCTestCase {
     }
 
     func testSettingsWindowUsesItsOwnWiderLayout() {
-        XCTAssertEqual(AppSurfaceLayout.dashboardWidth, 392)
+        XCTAssertEqual(AppSurfaceLayout.dashboardWidth, 440)
         XCTAssertEqual(AppSurfaceLayout.settingsWidth, 750)
         XCTAssertGreaterThan(
             AppSurfaceLayout.settingsWidth,

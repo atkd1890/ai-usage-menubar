@@ -21,13 +21,13 @@ struct DashboardView: View {
     var body: some View {
         Group {
             switch section {
-            case .header: content.header.padding([.horizontal, .top], 10).padding(.bottom, 8)
-            case .rows: content.providerRowsContent.padding(.horizontal, 10).padding(.bottom, 6)
+            case .header: content.header.padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 6)
+            case .rows: content.providerRowsContent.padding(.horizontal, 10).padding(.bottom, 5)
             case .footer: footer
             case nil: completeDashboard
             }
         }
-        .frame(width: 392)
+        .frame(width: AppSurfaceLayout.dashboardWidth)
     }
 
     private var content: DashboardContentView {
@@ -43,7 +43,7 @@ struct DashboardView: View {
         .safeAreaBar(edge: .bottom, spacing: 0) {
             footer
         }
-        .frame(width: 392)
+        .frame(width: AppSurfaceLayout.dashboardWidth)
         .onAppear {
             store.setRefreshInterval(refreshInterval)
             store.start()
@@ -121,12 +121,12 @@ struct DashboardView: View {
         }
         .padding(.leading, 12)
         .padding(.trailing, 8)
-        .padding(.vertical, 6)
+        .padding(.vertical, 5)
         .frame(maxWidth: .infinity)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
         .padding(.horizontal, 10)
-        .padding(.top, 4)
-        .padding(.bottom, 7)
+        .padding(.top, 3)
+        .padding(.bottom, 6)
     }
 
     private var freshnessSymbol: String {
@@ -179,12 +179,13 @@ struct DashboardContentView: View {
     var providerOrder: [ProviderID] = ProviderID.allCases
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 6) {
             header
             providerRows
         }
-        .padding([.horizontal, .top], 10)
-        .padding(.bottom, 6)
+        .padding(.horizontal, 10)
+        .padding(.top, 8)
+        .padding(.bottom, 5)
     }
 
     private var providerRows: some View {
@@ -193,13 +194,13 @@ struct DashboardContentView: View {
     }
 
     var providerRowsContent: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 6) {
             ForEach(topLevelProviders) { provider in
                 if provider != topLevelProviders.first {
                     Rectangle()
                         .fill(.primary.opacity(0.22))
                         .frame(height: 1)
-                        .padding(.vertical, 4)
+                        .padding(.vertical, 2.5)
                         .accessibilityHidden(true)
                 }
                 if let state = store.states[provider] {
@@ -235,6 +236,6 @@ struct DashboardContentView: View {
             .accessibilityHint("Choose whether percentages show usage left or used")
         }
         .padding(.horizontal, 4)
-        .frame(height: 28)
+        .frame(height: 26)
     }
 }

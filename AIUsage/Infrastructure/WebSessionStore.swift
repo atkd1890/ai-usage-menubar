@@ -2,13 +2,14 @@ import Foundation
 import SQLite3
 
 enum WebSessionSource: String, Sendable {
-    case edge, chrome, claudeDesktop, codexDesktop
+    case edge, chrome, claudeDesktop, codexDesktop, manusDesktop
     var directory: String {
         switch self {
         case .edge: "Microsoft Edge/Default"
         case .chrome: "Google/Chrome/Default"
         case .claudeDesktop: "Claude"
         case .codexDesktop: "Codex"
+        case .manusDesktop: "Manus"
         }
     }
     var keychainService: String {
@@ -17,6 +18,7 @@ enum WebSessionSource: String, Sendable {
         case .chrome: "Chrome Safe Storage"
         case .claudeDesktop: "Claude Safe Storage"
         case .codexDesktop: "Codex Safe Storage"
+        case .manusDesktop: "Manus Safe Storage"
         }
     }
 }
@@ -37,20 +39,36 @@ struct WebSessionStore: Sendable {
             "chatgpt.com": ["__Secure-next-auth.session-token", "__Secure-next-auth.session-token.0", "__Secure-next-auth.session-token.1"],
             "cursor.com": ["WorkosCursorSessionToken"],
             "manus.im": ["session_id"],
-            "muse.ai": ["hatch_sess", "hatch_gw"]]
+            "muse.ai": ["hatch_sess", "hatch_gw"],
+            "qwen.ai": ["refresh_token"],
+            "kimi.ai": ["kimi-auth"],
+            "services.adobe.com": ["ims_sid"]]
         guard !names.isEmpty, Set(names).isSubset(of: allowed[domain] ?? []),
               source != .claudeDesktop || domain == "claude.ai",
-              source != .codexDesktop || domain == "chatgpt.com" else {
+              source != .codexDesktop || domain == "chatgpt.com",
+              source != .manusDesktop || domain == "manus.im" else {
             throw ProviderFailure(.storage, "Unsupported session cookie request.")
         }
         let base = "~/Library/Application Support/\(source.directory)/"
         guard let path = [base + "Cookies", base + "Network/Cookies"].first(where: files.exists) else {
             throw ProviderFailure(.authentication, "No session found in the selected app or browser.")
         }
-        let selectedAccess = ["manus.im", "muse.ai"].contains(domain) && source == .edge ? BrowserDatabaseAccess.start(path: path) : nil
+        let selectedAccess = ["manus.im", "muse.ai", "qwen.ai", "kimi.ai", "services.adobe.com"].contains(domain) && (source == .edge || source == .chrome) ? BrowserDatabaseAccess.start(path: path) : nil
         defer { selectedAccess?.stopAccessingSecurityScopedResource() }
+        let hosts: Set<String>
+        switch domain {
+        case "manus.im":
+            hosts = ["manus.im", ".manus.im", "api.manus.im", ".api.manus.im"]
+        case "kimi.ai":
+            hosts = ["kimi.ai", ".kimi.ai", "www.kimi.ai", ".www.kimi.ai"]
+        case "services.adobe.com":
+            hosts = ["services.adobe.com", ".services.adobe.com", "adobe.com", ".adobe.com"]
+        default:
+            hosts = [domain, "." + domain]
+        }
+        let hostList = hosts.sorted().map { "'\($0)'" }.joined(separator: ",")
         let nameList = names.map { "'\($0)'" }.joined(separator: ",")
-        let sql = "SELECT json_group_array(json_object('name',name,'host',host_key,'value',value,'encrypted',hex(encrypted_value))) FROM cookies WHERE host_key IN ('\(domain)', '.\(domain)') AND name IN (\(nameList))"
+        let sql = "SELECT json_group_array(json_object('name',name,'host',host_key,'value',value,'encrypted',hex(encrypted_value))) FROM cookies WHERE host_key IN (\(hostList)) AND name IN (\(nameList))"
         guard let raw = try sqlite.queryValue(path: path, sql: sql), let data = raw.data(using: .utf8),
               let rows = try JSONSerialization.jsonObject(with: data) as? [[String: String]], !rows.isEmpty,
               let versionRaw = try sqlite.queryValue(path: path, sql: "SELECT value FROM meta WHERE key='version'"), let version = Int(versionRaw) else {
@@ -59,7 +77,7 @@ struct WebSessionStore: Sendable {
         var password: String?
         var result: [String: String] = [:]
         for row in rows {
-            guard let name = row["name"], names.contains(name), let host = row["host"], host == domain || host == "." + domain else { continue }
+            guard let name = row["name"], names.contains(name), let host = row["host"], hosts.contains(host) else { continue }
             let value: String
             if let plain = row["value"], !plain.isEmpty { value = plain }
             else {

@@ -354,6 +354,73 @@ final class MapperTests: XCTestCase {
         XCTAssertEqual(snapshot.windows.map(\.usedPercent), [25, 20])
     }
 
+    func testCopilotParsesDateOnlyResetAndQuotaAllowanceDetails() throws {
+        let expectedReset = Date(timeIntervalSince1970: 1_796_083_200) // 2026-12-01T00:00:00Z
+        let fullPayload = try CopilotUsageMapper.map(
+            response: httpResponse(json: """
+            {
+              "login": "atkd1890",
+              "copilot_plan": "individual",
+              "access_type_sku": "free_limited_copilot",
+              "quota_reset_date": "2026-12-01",
+              "quota_reset_date_utc": "2026-12-01T00:00:00.000Z",
+              "quota_snapshots": {
+                "chat": {
+                  "entitlement": 200,
+                  "remaining": 200,
+                  "percent_remaining": 100.0,
+                  "has_quota": true,
+                  "quota_reset_at": 0
+                },
+                "completions": {
+                  "entitlement": 2000,
+                  "remaining": 1862,
+                  "percent_remaining": 93.1,
+                  "has_quota": true,
+                  "quota_reset_at": 0
+                },
+                "premium_interactions": {
+                  "entitlement": 0,
+                  "remaining": 0,
+                  "has_quota": false,
+                  "quota_reset_at": 0
+                }
+              }
+            }
+            """),
+            now: Date()
+        )
+
+        XCTAssertEqual(fullPayload.planName, "Free")
+        XCTAssertEqual(fullPayload.windows.map(\.kind), [.chat, .completions])
+        XCTAssertEqual(fullPayload.windows.map(\.resetsAt), [expectedReset, expectedReset])
+        XCTAssertEqual(fullPayload.windows[0].remainingCount, 200)
+        XCTAssertEqual(fullPayload.windows[0].limitCount, 200)
+        XCTAssertEqual(fullPayload.windows[1].remainingCount, 1862)
+        XCTAssertEqual(fullPayload.windows[1].limitCount, 2000)
+        XCTAssertTrue(fullPayload.usageDetails.isEmpty)
+
+        let dateOnlyReset = try CopilotUsageMapper.map(
+            response: httpResponse(json: """
+            {
+              "copilot_plan": "individual",
+              "access_type_sku": "free_limited_copilot",
+              "quota_reset_date": "2026-12-01",
+              "quota_snapshots": {
+                "chat": {
+                  "entitlement": 200,
+                  "remaining": 200,
+                  "has_quota": true,
+                  "quota_reset_at": 0
+                }
+              }
+            }
+            """),
+            now: Date()
+        )
+        XCTAssertEqual(dateOnlyReset.windows.first?.resetsAt, expectedReset)
+    }
+
     func testDevinMapsDailyAndWeeklyRemainingQuota() throws {
         let snapshot = try DevinUsageMapper.map(
             response: httpResponse(json: """
