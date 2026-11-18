@@ -81,8 +81,6 @@ final class UsageStore {
                 CredentialSelectingProvider(local: CursorProvider(identity: AccountIdentityClient())),
                 ConsumerQuotaProvider(id: .manus), ConsumerQuotaProvider(id: .kimi), MuseProvider(), QwenProvider(), AdobeProvider(),
                 AntigravityDesktopProvider(), CopilotProvider(method: { .selected(for: .copilot) }, identity: AccountIdentityClient()),
-                // GrokProvider(), // Grok Build (CLI): temporarily disabled.
-                // Devin, Kiro and Z.ai remain temporarily disabled.
                 GeminiProvider(native: GeminiNativeProvider(session: google), identity: AccountIdentityClient())]
     }
 

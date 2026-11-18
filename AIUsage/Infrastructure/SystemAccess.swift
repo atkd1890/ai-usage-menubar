@@ -28,9 +28,7 @@ final class LoginShellEnvironment: @unchecked Sendable {
     private static let supportedNames = [
         "CLAUDE_CONFIG_DIR",
         "CODEX_HOME",
-        "KIRO_API_KEY",
-        "PATH",
-        "ZAI_API_KEY"
+        "PATH"
     ]
     private static let beginMarker = "__AIUSAGE_ENV_BEGIN__"
     private static let endMarker = "__AIUSAGE_ENV_END__"
@@ -139,9 +137,6 @@ struct SystemProviderAvailabilityChecker: ProviderAvailabilityChecking {
                     return Self.fileExists(at: "~/Library/Application Support/Claude/Cookies") ||
                         Self.fileExists(at: "~/Library/Application Support/Claude/Network/Cookies")
                 }
-                if provider.isDetectedByCredential {
-                    return Self.hasCredential(for: provider)
-                }
                 let descriptor = provider.descriptor
                 return descriptor.executableNames.contains {
                     Self.containsExecutable(named: $0, searchPath: path)
@@ -154,15 +149,6 @@ struct SystemProviderAvailabilityChecker: ProviderAvailabilityChecking {
 
     private static func fileExists(at path: String) -> Bool {
         FileManager.default.fileExists(atPath: expandHome(path))
-    }
-
-    private static func hasCredential(for provider: ProviderID) -> Bool {
-        switch provider {
-        case .zai:
-            ZAIAuthStore().loadCredential() != nil
-        default:
-            false
-        }
     }
 
     private static func containsExecutable(
@@ -362,4 +348,49 @@ func expandHome(_ path: String) -> String {
     guard path == "~" || path.hasPrefix("~/") else { return path }
     let home = FileManager.default.homeDirectoryForCurrentUser.path
     return path == "~" ? home : home + String(path.dropFirst())
+}
+
+protocol SQLiteValueReading: Sendable {
+    func queryValue(path: String, sql: String) throws -> String?
+    func execute(path: String, sql: String) throws
+}
+
+struct SQLiteCLIValueReader: SQLiteValueReading {
+    let runner: ProcessRunning
+
+    init(runner: ProcessRunning = SystemProcessRunner()) {
+        self.runner = runner
+    }
+
+    func queryValue(path: String, sql: String) throws -> String? {
+        guard FileManager.default.fileExists(atPath: expandHome(path)) else {
+            return nil
+        }
+        let result = try runner.run(
+            executable: "/usr/bin/sqlite3",
+            arguments: ["-readonly", expandHome(path), sql],
+            environment: [:],
+            timeout: 5
+        )
+        guard result.succeeded else { return nil }
+        let value = result.stdout.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        return value.isEmpty ? nil : value
+    }
+
+    func execute(path: String, sql: String) throws {
+        let result = try runner.run(
+            executable: "/usr/bin/sqlite3",
+            arguments: [expandHome(path), sql],
+            environment: [:],
+            timeout: 5
+        )
+        guard result.succeeded else {
+            throw ProviderFailure(
+                .storage,
+                "Local provider state could not be updated."
+            )
+        }
+    }
 }

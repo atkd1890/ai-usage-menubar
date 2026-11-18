@@ -6,10 +6,6 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
     case cursor
     case antigravity
     case copilot
-    case devin
-    case grok
-    case kiro
-    case zai
     case gemini
     case manus
     case kimi
@@ -20,10 +16,6 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
     // Keep enum cases for decoding saved preferences; only these providers run/show.
     static let enabledCases: [Self] = [
         .claude, .codex, .cursor, .antigravity, .copilot,
-        // .devin,
-        // .grok, // Grok Build (CLI): temporarily hidden.
-        // .kiro,
-        // .zai,
         .gemini, .manus, .kimi, .muse, .qwen, .adobe
     ]
 
@@ -37,10 +29,6 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .cursor: "Cursor"
         case .antigravity: "Antigravity"
         case .copilot: "GitHub"
-        case .devin: "Devin"
-        case .grok: "Grok Build (CLI)"
-        case .kiro: "Kiro"
-        case .zai: "Z.ai"
         case .manus: "Manus"
         case .kimi: "Kimi"
         case .muse: "Muse"
@@ -57,10 +45,6 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .cursor: "ProviderCursor"
         case .antigravity: "ProviderAntigravity"
         case .copilot: "ProviderCopilot"
-        case .devin: "ProviderDevin"
-        case .grok: "ProviderGrok"
-        case .kiro: "ProviderKiro"
-        case .zai: "ProviderZAI"
         case .manus: "ProviderManus"
         case .kimi: "ProviderKimi"
         case .muse: "ProviderMuse"
@@ -68,12 +52,6 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .qwen: "ProviderQwen"
         case .adobe: "ProviderAdobe"
         }
-    }
-
-    /// Z.ai has no app or CLI of its own to detect. It counts as installed
-    /// while another coding tool on this Mac holds a GLM Coding Plan key.
-    var isDetectedByCredential: Bool {
-        self == .zai
     }
 
     var descriptor: ProviderDescriptor {
@@ -94,10 +72,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .cursor: ["cursor"]
         case .antigravity: ["antigravity", "agy"]
         case .copilot: ["copilot", "github-copilot"]
-        case .devin: ["devin"]
-        case .grok: ["grok"]
-        case .kiro: ["kiro", "kiro-cli"]
-        case .zai, .gemini, .manus, .kimi, .muse, .qwen, .adobe: []
+        case .gemini, .manus, .kimi, .muse, .qwen, .adobe: []
         }
     }
 
@@ -126,24 +101,6 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
             [
                 "~/.config/github-copilot/apps.json",
                 "~/.config/github-copilot/hosts.json"
-            ]
-        case .devin:
-            [
-                "~/.local/share/devin",
-                "/Applications/Devin.app",
-                "~/Applications/Devin.app",
-                "~/Library/Application Support/Devin"
-            ]
-        case .grok:
-            ["~/.grok"]
-        case .kiro:
-            [
-                "~/.aws/sso/cache/kiro-auth-token.json",
-                "~/.kiro",
-                "/Applications/Kiro.app",
-                "~/Applications/Kiro.app",
-                "~/Library/Application Support/Kiro",
-                "~/.local/bin/kiro-cli"
             ]
         case .gemini:
             [GeminiNativeAuthStore.root + "/account_config"] +
@@ -190,8 +147,6 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
                 "~/Library/Application Support/Microsoft Edge/Default/Cookies",
                 "~/Library/Application Support/Google/Chrome/Default/Cookies"
             ]
-        case .zai:
-            []
         }
     }
 
@@ -200,8 +155,8 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .manus: .daily
         case .kimi, .adobe: .monthly
         case .cursor: .totalUsage
-        case .copilot, .kiro: .credits
-        case .claude, .codex, .antigravity, .devin, .grok, .zai, .gemini, .muse, .qwen: .weekly
+        case .copilot: .credits
+        case .claude, .codex, .antigravity, .gemini, .muse, .qwen: .weekly
         }
     }
 }
@@ -224,8 +179,6 @@ enum QuotaKind: RawRepresentable, Codable, Hashable, Sendable {
     case claudePool
     case claudePoolWeekly
     case argonWeekly
-    case webSearches
-    case freeTrial
     case firefly
     case additional(id: String, title: String)
 
@@ -249,8 +202,6 @@ enum QuotaKind: RawRepresentable, Codable, Hashable, Sendable {
         case .claudePool: "claudePool"
         case .claudePoolWeekly: "claudePoolWeekly"
         case .argonWeekly: "argonWeekly"
-        case .webSearches: "webSearches"
-        case .freeTrial: "freeTrial"
         case .firefly: "firefly"
         case .additional(let id, _): "additional:" + id
         }
@@ -274,8 +225,6 @@ enum QuotaKind: RawRepresentable, Codable, Hashable, Sendable {
         case "claudePool": self = .claudePool
         case "claudePoolWeekly": self = .claudePoolWeekly
         case "argonWeekly": self = .argonWeekly
-        case "webSearches": self = .webSearches
-        case "freeTrial": self = .freeTrial
         case "firefly": self = .firefly
         default:
             guard rawValue.hasPrefix("additional:"), rawValue.count > 11 else { return nil }
@@ -320,8 +269,6 @@ enum QuotaKind: RawRepresentable, Codable, Hashable, Sendable {
         case .claudePool: "3rd-party"
         case .claudePoolWeekly: "3rd-party Weekly"
         case .argonWeekly: "Argon Weekly"
-        case .webSearches: "Web Searches"
-        case .freeTrial: "Free Trial"
         case .firefly: "Firefly"
         case .additional(_, let title): title
         }
@@ -346,8 +293,6 @@ enum QuotaKind: RawRepresentable, Codable, Hashable, Sendable {
         case .claudePool: .claudePool
         case .claudePoolWeekly: .claudePoolWeekly
         case .argonWeekly: .argonWeekly
-        case .webSearches: .webSearches
-        case .freeTrial: .freeTrial
         case .firefly: .firefly
         case .additional(let id, let title): .additional(id: id, title: title)
         }
@@ -371,8 +316,6 @@ enum MenuBarMetricID: RawRepresentable, CaseIterable, Codable, Hashable, Identif
     case claudePool
     case claudePoolWeekly
     case argonWeekly
-    case webSearches
-    case freeTrial
     case extraUsage
     case credits
     case resets
@@ -398,8 +341,6 @@ enum MenuBarMetricID: RawRepresentable, CaseIterable, Codable, Hashable, Identif
         case .claudePool: "claudePool"
         case .claudePoolWeekly: "claudePoolWeekly"
         case .argonWeekly: "argonWeekly"
-        case .webSearches: "webSearches"
-        case .freeTrial: "freeTrial"
         case .extraUsage: "extraUsage"
         case .credits: "credits"
         case .resets: "resets"
@@ -425,8 +366,6 @@ enum MenuBarMetricID: RawRepresentable, CaseIterable, Codable, Hashable, Identif
         case "claudePool": self = .claudePool
         case "claudePoolWeekly": self = .claudePoolWeekly
         case "argonWeekly": self = .argonWeekly
-        case "webSearches": self = .webSearches
-        case "freeTrial": self = .freeTrial
         case "extraUsage": self = .extraUsage
         case "credits": self = .credits
         case "resets": self = .resets
@@ -454,7 +393,7 @@ enum MenuBarMetricID: RawRepresentable, CaseIterable, Codable, Hashable, Identif
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.rawValue == rhs.rawValue }
     func hash(into hasher: inout Hasher) { hasher.combine(rawValue) }
 
-    static let allCases: [Self] = [.session, .weekly, .daily, .monthly, .sonnet, .fable, .spark, .sparkWeekly, .totalUsage, .autoUsage, .apiUsage, .chat, .completions, .claudePool, .claudePoolWeekly, .argonWeekly, .webSearches, .freeTrial, .extraUsage, .credits, .resets, .firefly]
+    static let allCases: [Self] = [.session, .weekly, .daily, .monthly, .sonnet, .fable, .spark, .sparkWeekly, .totalUsage, .autoUsage, .apiUsage, .chat, .completions, .claudePool, .claudePoolWeekly, .argonWeekly, .extraUsage, .credits, .resets, .firefly]
 
 
     var id: Self { self }
@@ -477,8 +416,6 @@ enum MenuBarMetricID: RawRepresentable, CaseIterable, Codable, Hashable, Identif
         case .claudePool: "3rd-party"
         case .claudePoolWeekly: "3rd-party Weekly"
         case .argonWeekly: "Argon Weekly"
-        case .webSearches: "Web Searches"
-        case .freeTrial: "Free Trial"
         case .additional(_, let title): title
         case .extraUsage: "Extra Usage"
         case .credits: "Credits"
@@ -505,8 +442,6 @@ enum MenuBarMetricID: RawRepresentable, CaseIterable, Codable, Hashable, Identif
         case .claudePool: "brain"
         case .claudePoolWeekly: "calendar.badge.clock"
         case .argonWeekly: "atom"
-        case .webSearches: "magnifyingglass"
-        case .freeTrial: "gift"
         case .extraUsage: "dollarsign.circle"
         case .credits: "creditcard"
         case .resets: "arrow.counterclockwise"
@@ -533,8 +468,6 @@ enum MenuBarMetricID: RawRepresentable, CaseIterable, Codable, Hashable, Identif
         case .claudePool: "3P"
         case .claudePoolWeekly: "3PW"
         case .argonWeekly: "ArW"
-        case .webSearches: "WS"
-        case .freeTrial: "FT"
         case .extraUsage: "E"
         case .credits: "C"
         case .resets: "R"
@@ -561,8 +494,6 @@ enum MenuBarMetricID: RawRepresentable, CaseIterable, Codable, Hashable, Identif
         case .claudePool: .claudePool
         case .claudePoolWeekly: .claudePoolWeekly
         case .argonWeekly: .argonWeekly
-        case .webSearches: .webSearches
-        case .freeTrial: .freeTrial
         case .credits: .credits
         case .firefly: .firefly
         case .extraUsage, .resets: nil
@@ -800,10 +731,6 @@ struct ProviderSnapshot: Equatable, Sendable {
         case .muse: return "Product usage limits • Personal Agent & Top-up"
         case .qwen: return "Shared account limits • Chat, Agent & Qwen Code"
         case .adobe: return "Generative credits • Firefly, Photoshop & Creative Cloud"
-        case .devin: return "Product usage limits • Sessions & ACUs"
-        case .grok: return "Product usage limits • Grok CLI"
-        case .kiro: return "Product usage limits • Credits & Bonus"
-        case .zai: return "Product usage limits • Coding Plan & Web Search"
         }
     }
 

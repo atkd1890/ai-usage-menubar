@@ -459,32 +459,6 @@ final class VisualSnapshotTests: XCTestCase {
                     )
                 ],
                 fetchedAt: now
-            ),
-            .devin: ProviderSnapshot(
-                provider: .devin,
-                planName: "Teams",
-                windows: [
-                    QuotaWindow(kind: .daily, usedPercent: 20, resetsAt: nil),
-                    QuotaWindow(kind: .weekly, usedPercent: 65, resetsAt: nil)
-                ],
-                fetchedAt: now
-            ),
-            .grok: ProviderSnapshot(
-                provider: .grok,
-                planName: "SuperGrok",
-                windows: [
-                    QuotaWindow(kind: .weekly, usedPercent: 48, resetsAt: nil)
-                ],
-                fetchedAt: now
-            ),
-            .zai: ProviderSnapshot(
-                provider: .zai,
-                planName: "Pro",
-                windows: [
-                    QuotaWindow(kind: .session, usedPercent: 27, resetsAt: nil),
-                    QuotaWindow(kind: .weekly, usedPercent: 21, resetsAt: nil)
-                ],
-                fetchedAt: now
             )
         ]
         let providers = ProviderID.allCases.compactMap { provider in

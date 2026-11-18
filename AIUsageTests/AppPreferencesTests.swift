@@ -487,13 +487,13 @@ final class AppPreferencesTests: XCTestCase {
         let firstUpdatedRun = AppPreferences(defaults: defaults)
         XCTAssertEqual(
             firstUpdatedRun.trackedProviderIDs,
-            [.claude, .cursor, .antigravity, .copilot, .devin, .grok, .kiro, .zai, .gemini, .manus, .kimi, .muse, .qwen, .adobe]
+            [.claude, .cursor, .antigravity, .copilot, .gemini, .manus, .kimi, .muse, .qwen, .adobe]
         )
 
-        firstUpdatedRun.setTracking(false, for: .grok)
+        firstUpdatedRun.setTracking(false, for: .copilot)
         let laterRun = AppPreferences(defaults: defaults)
 
-        XCTAssertFalse(laterRun.isTracking(.grok))
+        XCTAssertFalse(laterRun.isTracking(.copilot))
         XCTAssertTrue(laterRun.isTracking(.cursor))
     }
 
@@ -529,51 +529,13 @@ final class AppPreferencesTests: XCTestCase {
         XCTAssertTrue(later.isTracking(.antigravity))
 
         // An installation that kept any of them keeps its choices.
-        for provider in [ProviderID.cursor, .antigravity, .copilot, .devin, .grok] {
+        for provider in [ProviderID.cursor, .antigravity, .copilot] {
             later.setTracking(false, for: provider)
         }
         XCTAssertEqual(
             AppPreferences(defaults: defaults).trackedProviderIDs,
-            [.claude, .codex, .kiro, .zai, .gemini, .manus, .kimi, .muse, .qwen, .adobe]
+            [.claude, .codex, .gemini, .manus, .kimi, .muse, .qwen, .adobe]
         )
-    }
-
-    @MainActor
-    func testZaiDroppedAfterAFirstLaunchIsRestoredOnce() throws {
-        // A 0.3.0 installation relaunched once: both seeds ran in memory only.
-        defaults.set(
-            try JSONEncoder().encode([ProviderID.claude, .codex, .antigravity]),
-            forKey: "trackedProviderIDs.v1"
-        )
-        defaults.set(true, forKey: "openUsageProvidersAdded.v1")
-        defaults.set(true, forKey: "zaiProviderAdded.v1")
-
-        let restored = AppPreferences(defaults: defaults)
-        XCTAssertEqual(
-            restored.trackedProviderIDs,
-            [.claude, .codex, .antigravity, .kiro, .zai, .gemini, .manus, .kimi, .muse, .qwen, .adobe]
-        )
-
-        restored.setTracking(false, for: .zai)
-        XCTAssertFalse(AppPreferences(defaults: defaults).isTracking(.zai))
-    }
-
-    @MainActor
-    func testKiroIsSeededOnceForExistingInstallations() throws {
-        // A 0.3.2 installation: every earlier seed ran and was saved.
-        defaults.set(
-            try JSONEncoder().encode([ProviderID.claude, .codex]),
-            forKey: "trackedProviderIDs.v1"
-        )
-        defaults.set(true, forKey: "openUsageProvidersAdded.v1")
-        defaults.set(true, forKey: "seededProvidersRestored.v1")
-        defaults.set(true, forKey: "zaiProviderAdded.v1")
-
-        let updated = AppPreferences(defaults: defaults)
-        XCTAssertEqual(updated.trackedProviderIDs, [.claude, .codex, .kiro, .gemini, .manus, .kimi, .muse, .qwen, .adobe])
-
-        updated.setTracking(false, for: .kiro)
-        XCTAssertFalse(AppPreferences(defaults: defaults).isTracking(.kiro))
     }
 
     @MainActor
@@ -625,9 +587,9 @@ final class AppPreferencesTests: XCTestCase {
     @MainActor
     func testMovingProviderPersistsAcrossRelaunch() {
         let preferences = AppPreferences(defaults: defaults)
-        preferences.moveProvider(.zai, to: .claude)
+        preferences.moveProvider(.adobe, to: .claude)
 
-        XCTAssertEqual(preferences.providerOrder.first, .zai)
+        XCTAssertEqual(preferences.providerOrder.first, .adobe)
         XCTAssertEqual(
             AppPreferences(defaults: defaults).providerOrder,
             preferences.providerOrder
@@ -720,8 +682,8 @@ final class AppPreferencesTests: XCTestCase {
 
     @MainActor
     func testNormalizedOrderRepairsStoredValue() {
-        let order = AppPreferences.normalizedOrder([.zai, .zai, .claude])
-        XCTAssertEqual(Array(order.prefix(2)), [.zai, .claude])
+        let order = AppPreferences.normalizedOrder([.adobe, .adobe, .claude])
+        XCTAssertEqual(Array(order.prefix(2)), [.adobe, .claude])
         XCTAssertEqual(Set(order), Set(ProviderID.allCases))
         XCTAssertEqual(order.count, ProviderID.allCases.count)
     }
@@ -739,11 +701,11 @@ final class AppPreferencesTests: XCTestCase {
                 availableItems: items
             )
         }
-        preferences.moveProvider(.zai, to: .claude)
+        preferences.moveProvider(.adobe, to: .claude)
 
         XCTAssertEqual(
             preferences.menuBarProviderConfigurations.first?.provider,
-            .zai
+            .adobe
         )
     }
 }

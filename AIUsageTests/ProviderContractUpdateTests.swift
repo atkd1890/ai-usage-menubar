@@ -100,48 +100,6 @@ final class ProviderContractUpdateTests: XCTestCase {
         )
     }
 
-    func testDevinReadsAnOmittedShareAsNothingLeft() throws {
-        let snapshot = try DevinUsageMapper.map(response: httpResponse(json: """
-        {"userStatus":{"planStatus":{
-          "planInfo":{"planName":"Pro"},
-          "dailyQuotaResetAtUnix":"1800050000",
-          "weeklyQuotaRemainingPercent":40,
-          "weeklyQuotaResetAtUnix":"1800300000"
-        }}}
-        """), now: now)
-
-        XCTAssertEqual(snapshot.windows.map(\.kind), [.daily, .weekly])
-        XCTAssertEqual(snapshot.windows.map(\.usedPercent), [100, 60])
-
-        let hidden = try DevinUsageMapper.map(response: httpResponse(json: """
-        {"userStatus":{"planStatus":{
-          "planInfo":{"hideDailyQuota":true},
-          "dailyQuotaRemainingPercent":75,
-          "dailyQuotaResetAtUnix":"1800050000"
-        }}}
-        """), now: now)
-        XCTAssertEqual(hidden.windows.map(\.kind), [.weekly])
-        XCTAssertEqual(hidden.windows.map(\.usedPercent), [25])
-        XCTAssertNil(hidden.windows.first?.resetsAt)
-
-        XCTAssertThrowsError(try DevinUsageMapper.map(response: httpResponse(json: """
-        {"userStatus":{"planStatus":{"weeklyQuotaRemainingPercent":"lots"}}}
-        """), now: now))
-    }
-
-    func testGrokTeamAccountsExplainTheMissingQuota() {
-        XCTAssertThrowsError(try GrokUsageMapper.map(
-            response: httpResponse(412, json: #"{"error":"User has no personal team"}"#),
-            planResponse: nil,
-            now: now
-        )) { error in
-            XCTAssertEqual(
-                (error as? ProviderFailure)?.message,
-                "Grok team accounts have no personal quota."
-            )
-        }
-    }
-
     func testCopilotRateLimit403IsNotARejectedToken() async {
         let http = MockHTTPClient([
             httpResponse(403, headers: [

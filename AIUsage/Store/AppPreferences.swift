@@ -118,15 +118,13 @@ final class AppPreferences {
         geminiChromeCookiesAllowed = defaults.bool(forKey: GeminiAuthStore.cookieAccessKey)
 
         providerOrder = Self.normalizedOrder(
-            Self.decode(
-                [ProviderID].self,
+            Self.decodeProviderList(
                 forKey: Key.providerOrder,
                 in: defaults
             ) ?? []
         )
 
-        let restoredProviders = Self.decode(
-            [ProviderID].self,
+        let restoredProviders = Self.decodeProviderList(
             forKey: Key.trackedProviderIDs,
             in: defaults
         )
@@ -143,15 +141,8 @@ final class AppPreferences {
                 (canRestore && restored.isDisjoint(with: Self.openUsageProviders)) {
                 initialTrackedProviders.formUnion(Self.openUsageProviders)
             }
-            if defaults.object(forKey: Key.zaiProviderAdded) == nil ||
-                (canRestore && !restored.contains(.zai)) {
-                initialTrackedProviders.insert(.zai)
-            }
             if defaults.object(forKey: Key.geminiProviderAdded) == nil {
                 initialTrackedProviders.insert(.gemini)
-            }
-            if defaults.object(forKey: Key.kiroProviderAdded) == nil {
-                initialTrackedProviders.insert(.kiro)
             }
         }
         if defaults.object(forKey: "consumerProvidersAdded.v1") == nil {
@@ -177,12 +168,9 @@ final class AppPreferences {
         }
         defaults.set(true, forKey: Key.openUsageProvidersAdded)
         defaults.set(true, forKey: Key.seededProvidersRestored)
-        defaults.set(true, forKey: Key.zaiProviderAdded)
-        defaults.set(true, forKey: Key.kiroProviderAdded)
         defaults.set(true, forKey: Key.geminiProviderAdded)
 
-        let storedVisibleProviders = Self.decode(
-            [ProviderID].self,
+        let storedVisibleProviders = Self.decodeProviderList(
             forKey: Key.visibleMenuBarProviderIDs,
             in: defaults
         )
@@ -441,9 +429,7 @@ final class AppPreferences {
     private static let openUsageProviders: Set<ProviderID> = [
         .cursor,
         .antigravity,
-        .copilot,
-        .devin,
-        .grok
+        .copilot
     ]
 
     private static func hasLegacyInstallation(
@@ -565,6 +551,17 @@ final class AppPreferences {
         return try? JSONDecoder().decode(type, from: data)
     }
 
+    private static func decodeProviderList(
+        forKey key: String,
+        in defaults: UserDefaults
+    ) -> [ProviderID]? {
+        guard let data = defaults.data(forKey: key),
+              let rawValues = try? JSONDecoder().decode([String].self, from: data) else {
+            return nil
+        }
+        return rawValues.compactMap(ProviderID.init(rawValue:))
+    }
+
     private static func value<Value: RawRepresentable>(
         _ type: Value.Type,
         forKey key: String,
@@ -592,8 +589,6 @@ final class AppPreferences {
         static let hasCompletedInitialSetup = "initialSettingsCompleted.v1"
         static let openUsageProvidersAdded =
             "openUsageProvidersAdded.v1"
-        static let zaiProviderAdded = "zaiProviderAdded.v1"
-        static let kiroProviderAdded = "kiroProviderAdded.v1"
         static let geminiProviderAdded = "geminiProviderAdded.v1"
         static let seededProvidersRestored = "seededProvidersRestored.v1"
         static let menuBarSelection = "menuBarSelection"

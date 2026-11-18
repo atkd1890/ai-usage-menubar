@@ -735,8 +735,8 @@ private struct ProviderWall: View {
     let store: UsageStore
 
     private let columns: [[ProviderID]] = [
-        [.claude, .antigravity, .devin, .grok, .kiro],
-        [.codex, .cursor, .copilot, .zai]
+        [.claude, .antigravity],
+        [.codex, .cursor, .copilot]
     ]
 
     var body: some View {
@@ -959,41 +959,6 @@ private enum ShowcaseData {
                     window(.credits, used: 33, in: 18 * day),
                     window(.chat, used: 12, in: 18 * day),
                     window(.completions, used: 4, in: 18 * day)
-                ],
-                fetchedAt: now
-            ),
-            ProviderSnapshot(
-                provider: .devin,
-                planName: "Team",
-                windows: [
-                    window(.daily, used: 45, in: 9 * hour),
-                    window(.weekly, used: 72, in: 3 * day + 9 * hour)
-                ],
-                fetchedAt: now
-            ),
-            ProviderSnapshot(
-                provider: .grok,
-                planName: "SuperGrok",
-                windows: [
-                    window(.weekly, used: 28, in: 6 * day + 3 * hour)
-                ],
-                fetchedAt: now
-            ),
-            ProviderSnapshot(
-                provider: .kiro,
-                planName: "Pro+",
-                windows: [
-                    window(.credits, used: 42, in: 23 * day)
-                ],
-                fetchedAt: now
-            ),
-            ProviderSnapshot(
-                provider: .zai,
-                planName: "Pro",
-                windows: [
-                    window(.session, used: 15, in: 4 * hour + 20 * 60),
-                    window(.weekly, used: 33, in: 5 * day + 11 * hour),
-                    window(.webSearches, used: 10, in: 21 * day)
                 ],
                 fetchedAt: now
             )
