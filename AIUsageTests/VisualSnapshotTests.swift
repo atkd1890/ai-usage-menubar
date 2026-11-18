@@ -5,7 +5,7 @@ import XCTest
 
 @MainActor
 final class VisualSnapshotTests: XCTestCase {
-    private let panelWidth: CGFloat = 392
+    private let panelWidth: CGFloat = 440
 
     func testProviderIconsAreTemplateImagesAtMenuBarSize() {
         for provider in ProviderID.allCases {
@@ -164,7 +164,7 @@ final class VisualSnapshotTests: XCTestCase {
             XCTAssertEqual(size.width, width, accuracy: 0.5)
             // Enabled products and Google grouping replace the original nine-row panel.
             // The native settings window constrains and scrolls taller content.
-            XCTAssertLessThan(size.height, 1100)
+            XCTAssertLessThan(size.height, 1300)
             XCTAssertGreaterThan(size.height, 300)
         }
 

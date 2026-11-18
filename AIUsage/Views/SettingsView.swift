@@ -358,12 +358,22 @@ private struct ProviderSettingsRow: View {
                     .fixedSize(horizontal: true, vertical: false)
                     .frame(width: 180, alignment: .leading)
                     .help("Uses the selected credential source immediately and reports the quota fetch result beneath the provider name.")
-                    if [ProviderID.manus, .muse].contains(descriptor.id), state?.failure?.kind == .storage {
-                        Button("Allow Edge access…") {
-                            if BrowserDatabaseAccess.request(providerName: displayName) { loginChanged() }
+                    if [ProviderID.manus, .muse, .qwen, .kimi, .adobe].contains(descriptor.id),
+                       state?.failure?.kind == .storage {
+                        let method = preferences.loginMethod(for: descriptor.id)
+                        if method == .edge {
+                            Button("Allow Edge access…") {
+                                if BrowserDatabaseAccess.request(providerName: displayName, source: .edge) { loginChanged() }
+                            }
+                            .controlSize(.small)
+                            .help("Choose only Edge Default's Cookies file using the macOS permission dialog.")
+                        } else if method == .chrome {
+                            Button("Allow Chrome access…") {
+                                if BrowserDatabaseAccess.request(providerName: displayName, source: .chrome) { loginChanged() }
+                            }
+                            .controlSize(.small)
+                            .help("Choose only Chrome Default's Cookies file using the macOS permission dialog.")
                         }
-                        .controlSize(.small)
-                        .help("Choose only Edge Default's Cookies file using the macOS permission dialog.")
                     }
                     if let account = state?.snapshot?.identityEmail {
                         Text(account).font(.caption2).foregroundStyle(.secondary)

@@ -14,6 +14,8 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
     case manus
     case kimi
     case muse
+    case qwen
+    case adobe
 
     // Keep enum cases for decoding saved preferences; only these providers run/show.
     static let enabledCases: [Self] = [
@@ -22,7 +24,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
         // .grok, // Grok Build (CLI): temporarily hidden.
         // .kiro,
         // .zai,
-        .gemini, .manus, .kimi, .muse
+        .gemini, .manus, .kimi, .muse, .qwen, .adobe
     ]
 
     var isEnabledInBuild: Bool { Self.enabledCases.contains(self) }
@@ -43,6 +45,8 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .kimi: "Kimi"
         case .muse: "Muse"
         case .gemini: "Gemini"
+        case .qwen: "Qwen"
+        case .adobe: "Adobe"
         }
     }
 
@@ -61,6 +65,8 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .kimi: "ProviderKimi"
         case .muse: "ProviderMuse"
         case .gemini: "ProviderGemini"
+        case .qwen: "ProviderQwen"
+        case .adobe: "ProviderAdobe"
         }
     }
 
@@ -91,7 +97,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .devin: ["devin"]
         case .grok: ["grok"]
         case .kiro: ["kiro", "kiro-cli"]
-        case .zai, .gemini, .manus, .kimi, .muse: []
+        case .zai, .gemini, .manus, .kimi, .muse, .qwen, .adobe: []
         }
     }
 
@@ -142,10 +148,48 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .gemini:
             [GeminiNativeAuthStore.root + "/account_config"] +
                 GeminiCredentialSource.edge.cookiePaths + GeminiCredentialSource.chrome.cookiePaths
-        case .manus, .muse:
-            ["~/Library/Application Support/Microsoft Edge/Default/Cookies"]
+        case .manus:
+            [
+                "/Applications/Manus Studio.app",
+                "~/Applications/Manus Studio.app",
+                "~/Library/Application Support/Manus/Cookies",
+                "~/Library/Application Support/Microsoft Edge/Default/Cookies",
+                "~/Library/Application Support/Google/Chrome/Default/Cookies"
+            ]
+        case .muse:
+            [
+                "~/Library/Application Support/Microsoft Edge/Default/Cookies",
+                "~/Library/Application Support/Google/Chrome/Default/Cookies"
+            ]
         case .kimi:
-            ["~/Library/Application Support/kimi-desktop/Local Storage/leveldb"]
+            [
+                "/Applications/Kimi.app",
+                "~/Applications/Kimi.app",
+                "~/Library/Application Support/kimi-desktop/Local Storage/leveldb",
+                "~/Library/Application Support/Microsoft Edge/Default/Local Storage/leveldb",
+                "~/Library/Application Support/Google/Chrome/Default/Local Storage/leveldb",
+                "~/Library/Application Support/Microsoft Edge/Default/Cookies",
+                "~/Library/Application Support/Google/Chrome/Default/Cookies"
+            ]
+        case .qwen:
+            [
+                "/Applications/Qwen.app",
+                "~/Applications/Qwen.app",
+                "~/Library/Application Support/Qwen",
+                "~/Library/Application Support/Microsoft Edge/Default/Cookies",
+                "~/Library/Application Support/Google/Chrome/Default/Cookies"
+            ]
+        case .adobe:
+            [
+                "/Applications/Adobe Photoshop 2027/Adobe Photoshop 2027.app",
+                "/Applications/Adobe Photoshop 2026/Adobe Photoshop 2026.app",
+                "/Applications/Adobe Photoshop 2025/Adobe Photoshop 2025.app",
+                "/Applications/Adobe Photoshop 2024/Adobe Photoshop 2024.app",
+                "/Applications/Adobe Creative Cloud/Adobe Creative Cloud.app",
+                "~/Library/Application Support/Adobe",
+                "~/Library/Application Support/Microsoft Edge/Default/Cookies",
+                "~/Library/Application Support/Google/Chrome/Default/Cookies"
+            ]
         case .zai:
             []
         }
@@ -154,10 +198,10 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
     var defaultMenuBarMetric: MenuBarMetricID {
         switch self {
         case .manus: .daily
-        case .kimi: .totalUsage
+        case .kimi, .adobe: .monthly
         case .cursor: .totalUsage
         case .copilot, .kiro: .credits
-        case .claude, .codex, .antigravity, .devin, .grok, .zai, .gemini, .muse: .weekly
+        case .claude, .codex, .antigravity, .devin, .grok, .zai, .gemini, .muse, .qwen: .weekly
         }
     }
 }
@@ -166,6 +210,7 @@ enum QuotaKind: RawRepresentable, Codable, Hashable, Sendable {
     case session
     case weekly
     case daily
+    case monthly
     case sonnet
     case fable
     case sparkSession
@@ -181,6 +226,7 @@ enum QuotaKind: RawRepresentable, Codable, Hashable, Sendable {
     case argonWeekly
     case webSearches
     case freeTrial
+    case firefly
     case additional(id: String, title: String)
 
     typealias RawValue = String
@@ -189,6 +235,7 @@ enum QuotaKind: RawRepresentable, Codable, Hashable, Sendable {
         case .session: "session"
         case .weekly: "weekly"
         case .daily: "daily"
+        case .monthly: "monthly"
         case .sonnet: "sonnet"
         case .fable: "fable"
         case .sparkSession: "sparkSession"
@@ -204,6 +251,7 @@ enum QuotaKind: RawRepresentable, Codable, Hashable, Sendable {
         case .argonWeekly: "argonWeekly"
         case .webSearches: "webSearches"
         case .freeTrial: "freeTrial"
+        case .firefly: "firefly"
         case .additional(let id, _): "additional:" + id
         }
     }
@@ -212,6 +260,7 @@ enum QuotaKind: RawRepresentable, Codable, Hashable, Sendable {
         case "session": self = .session
         case "weekly": self = .weekly
         case "daily": self = .daily
+        case "monthly": self = .monthly
         case "sonnet": self = .sonnet
         case "fable": self = .fable
         case "sparkSession": self = .sparkSession
@@ -227,6 +276,7 @@ enum QuotaKind: RawRepresentable, Codable, Hashable, Sendable {
         case "argonWeekly": self = .argonWeekly
         case "webSearches": self = .webSearches
         case "freeTrial": self = .freeTrial
+        case "firefly": self = .firefly
         default:
             guard rawValue.hasPrefix("additional:"), rawValue.count > 11 else { return nil }
             let id = String(rawValue.dropFirst(11))
@@ -256,6 +306,7 @@ enum QuotaKind: RawRepresentable, Codable, Hashable, Sendable {
         case .session: "Session"
         case .weekly: "Weekly"
         case .daily: "Daily"
+        case .monthly: "Monthly"
         case .sonnet: "Sonnet"
         case .fable: "Fable"
         case .sparkSession: "Spark"
@@ -264,13 +315,14 @@ enum QuotaKind: RawRepresentable, Codable, Hashable, Sendable {
         case .autoUsage: "Auto Usage"
         case .apiUsage: "API Usage"
         case .credits: "Credits"
-        case .chat: "Chat"
-        case .completions: "Completions"
+        case .chat: "Chat Monthly"
+        case .completions: "Completions Monthly"
         case .claudePool: "3rd-party"
         case .claudePoolWeekly: "3rd-party Weekly"
         case .argonWeekly: "Argon Weekly"
         case .webSearches: "Web Searches"
         case .freeTrial: "Free Trial"
+        case .firefly: "Firefly"
         case .additional(_, let title): title
         }
     }
@@ -280,6 +332,7 @@ enum QuotaKind: RawRepresentable, Codable, Hashable, Sendable {
         case .session: .session
         case .weekly: .weekly
         case .daily: .daily
+        case .monthly: .monthly
         case .sonnet: .sonnet
         case .fable: .fable
         case .sparkSession: .spark
@@ -295,6 +348,7 @@ enum QuotaKind: RawRepresentable, Codable, Hashable, Sendable {
         case .argonWeekly: .argonWeekly
         case .webSearches: .webSearches
         case .freeTrial: .freeTrial
+        case .firefly: .firefly
         case .additional(let id, let title): .additional(id: id, title: title)
         }
     }
@@ -304,6 +358,7 @@ enum MenuBarMetricID: RawRepresentable, CaseIterable, Codable, Hashable, Identif
     case session
     case weekly
     case daily
+    case monthly
     case sonnet
     case fable
     case spark
@@ -321,6 +376,7 @@ enum MenuBarMetricID: RawRepresentable, CaseIterable, Codable, Hashable, Identif
     case extraUsage
     case credits
     case resets
+    case firefly
     case additional(id: String, title: String)
 
     typealias RawValue = String
@@ -329,6 +385,7 @@ enum MenuBarMetricID: RawRepresentable, CaseIterable, Codable, Hashable, Identif
         case .session: "session"
         case .weekly: "weekly"
         case .daily: "daily"
+        case .monthly: "monthly"
         case .sonnet: "sonnet"
         case .fable: "fable"
         case .spark: "spark"
@@ -346,6 +403,7 @@ enum MenuBarMetricID: RawRepresentable, CaseIterable, Codable, Hashable, Identif
         case .extraUsage: "extraUsage"
         case .credits: "credits"
         case .resets: "resets"
+        case .firefly: "firefly"
         case .additional(let id, _): "additional:" + id
         }
     }
@@ -354,6 +412,7 @@ enum MenuBarMetricID: RawRepresentable, CaseIterable, Codable, Hashable, Identif
         case "session": self = .session
         case "weekly": self = .weekly
         case "daily": self = .daily
+        case "monthly": self = .monthly
         case "sonnet": self = .sonnet
         case "fable": self = .fable
         case "spark": self = .spark
@@ -371,6 +430,7 @@ enum MenuBarMetricID: RawRepresentable, CaseIterable, Codable, Hashable, Identif
         case "extraUsage": self = .extraUsage
         case "credits": self = .credits
         case "resets": self = .resets
+        case "firefly": self = .firefly
         default:
             guard rawValue.hasPrefix("additional:"), rawValue.count > 11 else { return nil }
             let id = String(rawValue.dropFirst(11))
@@ -394,7 +454,7 @@ enum MenuBarMetricID: RawRepresentable, CaseIterable, Codable, Hashable, Identif
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.rawValue == rhs.rawValue }
     func hash(into hasher: inout Hasher) { hasher.combine(rawValue) }
 
-    static let allCases: [Self] = [.session, .weekly, .daily, .sonnet, .fable, .spark, .sparkWeekly, .totalUsage, .autoUsage, .apiUsage, .chat, .completions, .claudePool, .claudePoolWeekly, .argonWeekly, .webSearches, .freeTrial, .extraUsage, .credits, .resets]
+    static let allCases: [Self] = [.session, .weekly, .daily, .monthly, .sonnet, .fable, .spark, .sparkWeekly, .totalUsage, .autoUsage, .apiUsage, .chat, .completions, .claudePool, .claudePoolWeekly, .argonWeekly, .webSearches, .freeTrial, .extraUsage, .credits, .resets, .firefly]
 
 
     var id: Self { self }
@@ -404,6 +464,7 @@ enum MenuBarMetricID: RawRepresentable, CaseIterable, Codable, Hashable, Identif
         case .session: "Session"
         case .weekly: "Weekly"
         case .daily: "Daily"
+        case .monthly: "Monthly"
         case .sonnet: "Sonnet"
         case .fable: "Fable"
         case .spark: "Spark"
@@ -411,8 +472,8 @@ enum MenuBarMetricID: RawRepresentable, CaseIterable, Codable, Hashable, Identif
         case .totalUsage: "Total Usage"
         case .autoUsage: "Auto Usage"
         case .apiUsage: "API Usage"
-        case .chat: "Chat"
-        case .completions: "Completions"
+        case .chat: "Chat Monthly"
+        case .completions: "Completions Monthly"
         case .claudePool: "3rd-party"
         case .claudePoolWeekly: "3rd-party Weekly"
         case .argonWeekly: "Argon Weekly"
@@ -422,6 +483,7 @@ enum MenuBarMetricID: RawRepresentable, CaseIterable, Codable, Hashable, Identif
         case .extraUsage: "Extra Usage"
         case .credits: "Credits"
         case .resets: "Resets"
+        case .firefly: "Firefly"
         }
     }
 
@@ -430,6 +492,7 @@ enum MenuBarMetricID: RawRepresentable, CaseIterable, Codable, Hashable, Identif
         case .session: "clock"
         case .weekly: "calendar"
         case .daily: "sun.max"
+        case .monthly: "calendar"
         case .sonnet: "waveform"
         case .fable: "book.closed"
         case .spark: "sparkles"
@@ -447,6 +510,7 @@ enum MenuBarMetricID: RawRepresentable, CaseIterable, Codable, Hashable, Identif
         case .extraUsage: "dollarsign.circle"
         case .credits: "creditcard"
         case .resets: "arrow.counterclockwise"
+        case .firefly: "sparkles"
         case .additional: "gauge.with.dots.needle.50percent"
         }
     }
@@ -456,6 +520,7 @@ enum MenuBarMetricID: RawRepresentable, CaseIterable, Codable, Hashable, Identif
         case .session: "S"
         case .weekly: "W"
         case .daily: "D"
+        case .monthly: "M"
         case .sonnet: "So"
         case .fable: "F"
         case .spark: "Sp"
@@ -473,6 +538,7 @@ enum MenuBarMetricID: RawRepresentable, CaseIterable, Codable, Hashable, Identif
         case .extraUsage: "E"
         case .credits: "C"
         case .resets: "R"
+        case .firefly: "FF"
         case .additional(_, let title): String(title.prefix(6))
         }
     }
@@ -482,6 +548,7 @@ enum MenuBarMetricID: RawRepresentable, CaseIterable, Codable, Hashable, Identif
         case .session: .session
         case .weekly: .weekly
         case .daily: .daily
+        case .monthly: .monthly
         case .sonnet: .sonnet
         case .fable: .fable
         case .spark: .sparkSession
@@ -497,6 +564,7 @@ enum MenuBarMetricID: RawRepresentable, CaseIterable, Codable, Hashable, Identif
         case .webSearches: .webSearches
         case .freeTrial: .freeTrial
         case .credits: .credits
+        case .firefly: .firefly
         case .extraUsage, .resets: nil
         case .additional(let id, let title): .additional(id: id, title: title)
         }
@@ -544,9 +612,45 @@ struct QuotaWindow: Identifiable, Equatable, Sendable {
     let kind: QuotaKind
     let usedPercent: Double
     let resetsAt: Date?
+    let remainingCount: Double?
+    let limitCount: Double?
+
+    init(
+        kind: QuotaKind,
+        usedPercent: Double,
+        resetsAt: Date?,
+        remainingCount: Double? = nil,
+        limitCount: Double? = nil
+    ) {
+        self.kind = kind
+        self.usedPercent = usedPercent
+        self.resetsAt = resetsAt
+        if let remaining = remainingCount, let limit = limitCount,
+           remaining.isFinite, limit.isFinite, limit > 0, remaining >= 0 {
+            self.remainingCount = min(remaining, limit)
+            self.limitCount = limit
+        } else {
+            self.remainingCount = nil
+            self.limitCount = nil
+        }
+    }
 
     var id: QuotaKind { kind }
     var renderedFraction: Double { min(max(usedPercent / 100, 0), 1) }
+
+    func countText(for displayMode: UsageDisplayMode) -> String? {
+        guard let remainingCount, let limitCount, limitCount > 0 else { return nil }
+        let shown = displayMode == .used ? max(limitCount - remainingCount, 0) : remainingCount
+        return "\(Self.formatCount(shown)) / \(Self.formatCount(limitCount))"
+    }
+
+    private static func formatCount(_ value: Double) -> String {
+        let rounded = (value * 100).rounded() / 100
+        if rounded.rounded() == rounded {
+            return Int(rounded).formatted(.number)
+        }
+        return rounded.formatted(.number.precision(.fractionLength(0...2)))
+    }
 }
 
 enum BillingUsage: Equatable, Sendable {
@@ -683,15 +787,23 @@ struct ProviderSnapshot: Equatable, Sendable {
     let xSubscription: XSubscriptionUsage?
     var displayName: String { xSubscription == nil ? provider.displayName : "X Subscription" }
     var dashboardSubtitle: String? {
-        if xSubscription != nil { return "Shared weekly pool • Cursor & Grok" }
+        if xSubscription != nil { return "Shared account limits • Cursor & Grok" }
         switch provider {
         case .claude: return "Shared account limits • Chat, Code & Cowork"
-        case .codex: return "Shared allowance • Codex & ChatGPT Work"
-        case .copilot: return "Account usage • GitHub"
-        case .cursor: return "Product usage • Cursor"
-        case .gemini: return "Product usage • Gemini"
-        case .antigravity: return "Product usage • Antigravity"
-        default: return usageScope
+        case .codex: return "Shared account limits • Codex & ChatGPT Work"
+        case .cursor: return "Product usage limits • Editor, Auto & API"
+        case .antigravity: return "Product usage limits • Gemini, 3rd-party & Argon"
+        case .copilot: return "Monthly Copilot quota • Chat & Completions"
+        case .gemini: return "Shared account limits • Gemini App & Web"
+        case .manus: return "Product usage limits • Agent Tasks & Credits"
+        case .kimi: return "Shared account limits • Chat & Kimi Code"
+        case .muse: return "Product usage limits • Personal Agent & Top-up"
+        case .qwen: return "Shared account limits • Chat, Agent & Qwen Code"
+        case .adobe: return "Generative credits • Firefly, Photoshop & Creative Cloud"
+        case .devin: return "Product usage limits • Sessions & ACUs"
+        case .grok: return "Product usage limits • Grok CLI"
+        case .kiro: return "Product usage limits • Credits & Bonus"
+        case .zai: return "Product usage limits • Coding Plan & Web Search"
         }
     }
 
@@ -714,7 +826,10 @@ struct ProviderSnapshot: Equatable, Sendable {
         guard let label = accountLabel else { return nil }
         let prefix: String
         if provider == .antigravity && credentialSource == "Antigravity app" { prefix = "native-session:" }
-        else if provider == .muse && credentialSource == "Edge Default" { prefix = "muse-session:" }
+        else if provider == .muse { prefix = "muse-session:" }
+        else if provider == .manus { prefix = "manus-session:" }
+        else if provider == .kimi { prefix = "kimi-session:" }
+        else if provider == .qwen { prefix = "qwen-session:" }
         else { return nil }
         guard label.hasPrefix(prefix), label.dropFirst(prefix.count).count == 64,
               label.dropFirst(prefix.count).allSatisfy({ $0.isHexDigit }) else { return nil }
@@ -798,6 +913,9 @@ struct ProviderSnapshot: Equatable, Sendable {
         guard let quotaKind = metric.quotaKind else { return nil }
         if xSubscription != nil, [.totalUsage, .autoUsage, .apiUsage].contains(metric) {
             return windows.first { $0.kind == .weekly }
+        }
+        if provider == .kimi, metric == .totalUsage {
+            return windows.first { $0.kind == .monthly || $0.kind == .totalUsage }
         }
         return windows.first { $0.kind == quotaKind }
     }

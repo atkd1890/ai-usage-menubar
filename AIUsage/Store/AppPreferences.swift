@@ -162,6 +162,14 @@ final class AppPreferences {
             initialTrackedProviders.insert(.muse)
             defaults.set(true, forKey: "museProviderAdded.v1")
         }
+        if defaults.object(forKey: "qwenProviderAdded.v1") == nil {
+            initialTrackedProviders.insert(.qwen)
+            defaults.set(true, forKey: "qwenProviderAdded.v1")
+        }
+        if defaults.object(forKey: "adobeProviderAdded.v1") == nil {
+            initialTrackedProviders.insert(.adobe)
+            defaults.set(true, forKey: "adobeProviderAdded.v1")
+        }
         trackedProviderIDs = initialTrackedProviders
         // Property observers do not run in an initializer.
         if restoredProviders.map(Set.init) != initialTrackedProviders {
@@ -613,8 +621,11 @@ enum ProviderLoginMethod: String, CaseIterable, Identifiable, Sendable {
         switch provider {
         case .gemini: [.desktop, .edge, .chrome]
         case .antigravity: [.desktop]
-        case .manus, .muse: [.edge]
-        case .kimi: [.desktop]
+        case .manus: [.desktop, .edge, .chrome]
+        case .muse: [.edge, .chrome]
+        case .adobe: [.edge, .chrome]
+        case .kimi: [.desktop, .edge, .chrome]
+        case .qwen: [.desktop, .edge, .chrome]
         case .cursor: [.desktop, .edge, .chrome]
         case .codex: [.cli, .edge, .chrome]
         case .claude: [.cli, .desktop, .edge, .chrome]

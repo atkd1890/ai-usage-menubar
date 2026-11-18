@@ -26,8 +26,19 @@ final class AppPreferencesTests: XCTestCase {
         XCTAssertEqual(ProviderLoginMethod.supported(for: .claude), [.cli, .desktop, .edge, .chrome])
         XCTAssertEqual(ProviderLoginMethod.supported(for: .codex), [.cli, .edge, .chrome])
         XCTAssertEqual(ProviderLoginMethod.supported(for: .gemini), [.desktop, .edge, .chrome])
+        XCTAssertEqual(ProviderLoginMethod.supported(for: .manus), [.desktop, .edge, .chrome])
+        XCTAssertEqual(ProviderLoginMethod.supported(for: .muse), [.edge, .chrome])
+        XCTAssertEqual(ProviderLoginMethod.supported(for: .kimi), [.desktop, .edge, .chrome])
         XCTAssertEqual(ProviderLoginMethod.supported(for: .copilot), [.editorFallback, .editor, .cli])
         let preferences = AppPreferences(defaults: defaults)
+        preferences.setLoginMethod(.edge, for: .manus)
+        XCTAssertEqual(AppPreferences(defaults: defaults).loginMethod(for: .manus), .edge)
+        preferences.setLoginMethod(.chrome, for: .muse)
+        XCTAssertEqual(AppPreferences(defaults: defaults).loginMethod(for: .muse), .chrome)
+        preferences.setLoginMethod(.chrome, for: .kimi)
+        XCTAssertEqual(AppPreferences(defaults: defaults).loginMethod(for: .kimi), .chrome)
+        preferences.setLoginMethod(.desktop, for: .muse)
+        XCTAssertEqual(preferences.loginMethod(for: .muse), .chrome)
         preferences.setLoginMethod(.cli, for: .copilot)
         XCTAssertEqual(AppPreferences(defaults: defaults).loginMethod(for: .copilot), .cli)
         preferences.setLoginMethod(.chrome, for: .copilot)
@@ -476,7 +487,7 @@ final class AppPreferencesTests: XCTestCase {
         let firstUpdatedRun = AppPreferences(defaults: defaults)
         XCTAssertEqual(
             firstUpdatedRun.trackedProviderIDs,
-            [.claude, .cursor, .antigravity, .copilot, .devin, .grok, .kiro, .zai, .gemini, .manus, .kimi, .muse]
+            [.claude, .cursor, .antigravity, .copilot, .devin, .grok, .kiro, .zai, .gemini, .manus, .kimi, .muse, .qwen, .adobe]
         )
 
         firstUpdatedRun.setTracking(false, for: .grok)
@@ -523,7 +534,7 @@ final class AppPreferencesTests: XCTestCase {
         }
         XCTAssertEqual(
             AppPreferences(defaults: defaults).trackedProviderIDs,
-            [.claude, .codex, .kiro, .zai, .gemini, .manus, .kimi, .muse]
+            [.claude, .codex, .kiro, .zai, .gemini, .manus, .kimi, .muse, .qwen, .adobe]
         )
     }
 
@@ -540,7 +551,7 @@ final class AppPreferencesTests: XCTestCase {
         let restored = AppPreferences(defaults: defaults)
         XCTAssertEqual(
             restored.trackedProviderIDs,
-            [.claude, .codex, .antigravity, .kiro, .zai, .gemini, .manus, .kimi, .muse]
+            [.claude, .codex, .antigravity, .kiro, .zai, .gemini, .manus, .kimi, .muse, .qwen, .adobe]
         )
 
         restored.setTracking(false, for: .zai)
@@ -559,7 +570,7 @@ final class AppPreferencesTests: XCTestCase {
         defaults.set(true, forKey: "zaiProviderAdded.v1")
 
         let updated = AppPreferences(defaults: defaults)
-        XCTAssertEqual(updated.trackedProviderIDs, [.claude, .codex, .kiro, .gemini, .manus, .kimi, .muse])
+        XCTAssertEqual(updated.trackedProviderIDs, [.claude, .codex, .kiro, .gemini, .manus, .kimi, .muse, .qwen, .adobe])
 
         updated.setTracking(false, for: .kiro)
         XCTAssertFalse(AppPreferences(defaults: defaults).isTracking(.kiro))
