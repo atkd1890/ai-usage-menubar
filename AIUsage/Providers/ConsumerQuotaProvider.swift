@@ -10,16 +10,22 @@ actor ConsumerQuotaProvider: UsageProvider {
     private let nativeKimi: @Sendable () throws -> KimiNativeSession
     private let allowRefresh: @Sendable () -> Bool
     private let method: @Sendable () -> ProviderLoginMethod
+    private let kimiSessionStore: KimiSessionStore?
+    private let now: @Sendable () -> Date
     private var kimiCache: (fingerprint: Data, session: KimiNativeSession)?
     private var refreshTask: (fingerprint: Data, task: Task<KimiNativeSession, Error>)?
 
     init(id: ProviderID, http: (any HTTPClient)? = nil, sessions: WebSessionStore = WebSessionStore(),
          nativeKimi: @escaping @Sendable () throws -> KimiNativeSession = { try KimiNativeSession.load() },
          allowRefresh: @escaping @Sendable () -> Bool = { UserDefaults.standard.bool(forKey: "kimiNativeRefreshAllowed.v1") },
-         method: (@Sendable () -> ProviderLoginMethod)? = nil) {
+         method: (@Sendable () -> ProviderLoginMethod)? = nil,
+         kimiSessionStore: KimiSessionStore? = nil,
+         now: @escaping @Sendable () -> Date = { Date() }) {
         self.id = id; self.sessions = sessions
         self.nativeKimi = nativeKimi; self.allowRefresh = allowRefresh
         self.method = method ?? { ProviderLoginMethod.selected(for: id) }
+        self.kimiSessionStore = kimiSessionStore ?? (http == nil ? KimiSessionStore() : nil)
+        self.now = now
         self.http = http ?? GeminiReadOnlyHTTPClient(allowedHosts: [id == .manus ? "api.manus.im" : "www.kimi.ai"])
     }
     func fetch() async throws -> ProviderSnapshot {
@@ -46,17 +52,68 @@ actor ConsumerQuotaProvider: UsageProvider {
         let load = nativeKimi
         let native = try await Task.detached(priority: .utility) { try load() }.value
         let fingerprint = Data(SHA256.hash(data: Data((native.sourceLabel + "\0" + native.access + "\0" + (native.refresh ?? "")).utf8)))
-        var session = kimiCache?.fingerprint == fingerprint ? kimiCache!.session : native
+        let fingerprintHex = fingerprint.map { String(format: "%02x", $0) }.joined()
         let historyID = "kimi-session:" + Data(SHA256.hash(data: Data((native.sourceLabel + "\0" + (native.refresh ?? native.access)).utf8))).map { String(format: "%02x", $0) }.joined()
+
+        var session: KimiNativeSession
+        if kimiCache?.fingerprint == fingerprint {
+            session = kimiCache!.session
+        } else if let persisted = kimiSessionStore?.load(for: native.sourceLabel) {
+            if persisted.seedFingerprint == fingerprintHex, KimiNativeSession.valid(persisted.accessToken) {
+                let persistedRefresh = persisted.refreshToken.flatMap { KimiNativeSession.valid($0) ? $0 : nil } ?? native.refresh
+                session = KimiNativeSession(access: persisted.accessToken, refresh: persistedRefresh, sourceLabel: native.sourceLabel)
+                kimiCache = (fingerprint, session)
+            } else {
+                kimiSessionStore?.remove(for: native.sourceLabel)
+                session = native
+            }
+        } else {
+            session = native
+        }
+
+        if allowRefresh(),
+           let expiresAt = KimiNativeSession.jwtClaims(session.access)?.expiresAt,
+           expiresAt <= now().addingTimeInterval(120),
+           session.refresh != nil {
+            session = try await refreshed(
+                session,
+                fingerprint: fingerprint,
+                seedFingerprintHex: fingerprintHex,
+                fallbackRefresh: native.refresh
+            )
+        }
+
         for attempt in 0...1 {
             let subscription = try await request("https://www.kimi.ai/apiv2/kimi.gateway.membership.v2.MembershipService/GetSubscription", token: session.access)
-            if subscription.statusCode == 401 && attempt == 0 {
-                session = try await refreshed(session, fingerprint: fingerprint); continue
+            if subscription.statusCode == 401 {
+                if attempt == 0 {
+                    session = try await refreshed(
+                        session,
+                        fingerprint: fingerprint,
+                        seedFingerprintHex: fingerprintHex,
+                        fallbackRefresh: native.refresh
+                    )
+                    continue
+                }
+                kimiCache = nil
+                kimiSessionStore?.remove(for: session.sourceLabel)
+                throw ProviderFailure(.authentication, "Kimi session expired. Sign in to \(session.sourceLabel) again.")
             }
             _ = try Self.body(subscription)
             let stats = try await request("https://www.kimi.ai/apiv2/kimi.gateway.membership.v2.MembershipService/GetSubscriptionStats", token: session.access)
-            if stats.statusCode == 401 && attempt == 0 {
-                session = try await refreshed(session, fingerprint: fingerprint); continue
+            if stats.statusCode == 401 {
+                if attempt == 0 {
+                    session = try await refreshed(
+                        session,
+                        fingerprint: fingerprint,
+                        seedFingerprintHex: fingerprintHex,
+                        fallbackRefresh: native.refresh
+                    )
+                    continue
+                }
+                kimiCache = nil
+                kimiSessionStore?.remove(for: session.sourceLabel)
+                throw ProviderFailure(.authentication, "Kimi session expired. Sign in to \(session.sourceLabel) again.")
             }
             let code = try? await request("https://www.kimi.ai/apiv2/kimi.gateway.billing.v1.BillingService/GetUsages", token: session.access,
                 payload: Data(#"{"scope":["FEATURE_CODING"]}"#.utf8))
@@ -70,18 +127,46 @@ actor ConsumerQuotaProvider: UsageProvider {
         }
         throw ProviderFailure(.authentication, "Kimi session expired. Sign in to \(session.sourceLabel) again.")
     }
-    private func refreshed(_ session: KimiNativeSession, fingerprint: Data) async throws -> KimiNativeSession {
+    private static func sendRefresh(http: any HTTPClient, refreshToken: String) async throws -> HTTPResponse {
+        var headers = [
+            "Authorization": "Bearer " + refreshToken,
+            "Accept": "application/json",
+            "Origin": "https://www.kimi.ai",
+            "User-Agent": "Mozilla/5.0"
+        ]
+        for (key, value) in KimiNativeSession.sessionHeaders(for: refreshToken) {
+            headers[key] = value
+        }
+        return try await http.send(HTTPRequest(
+            method: .get,
+            url: URL(string: "https://www.kimi.ai/api/auth/token/refresh")!,
+            headers: headers,
+            body: nil
+        ))
+    }
+    private func refreshed(
+        _ session: KimiNativeSession,
+        fingerprint: Data,
+        seedFingerprintHex: String,
+        fallbackRefresh: String?
+    ) async throws -> KimiNativeSession {
         guard allowRefresh(), let refresh = session.refresh, KimiNativeSession.valid(refresh) else {
             throw ProviderFailure(.authentication, "Kimi session expired. Open \(session.sourceLabel) to renew the login.")
         }
         if let active = refreshTask, active.fingerprint == fingerprint { return try await active.task.value }
         let http = self.http
+        let sourceLabel = session.sourceLabel
         let task = Task<KimiNativeSession, Error> {
-            let response = try await http.send(HTTPRequest(method: .get,
-                url: URL(string: "https://www.kimi.ai/api/auth/token/refresh")!, headers: [
-                    "Authorization": "Bearer " + refresh, "Accept": "application/json",
-                    "Origin": "https://www.kimi.ai", "User-Agent": "Mozilla/5.0"
-                ], body: nil))
+            var response = try await Self.sendRefresh(http: http, refreshToken: refresh)
+            if [401, 403].contains(response.statusCode),
+               let fallback = fallbackRefresh,
+               fallback != refresh,
+               KimiNativeSession.valid(fallback) {
+                response = try await Self.sendRefresh(http: http, refreshToken: fallback)
+            }
+            if [401, 403].contains(response.statusCode) {
+                throw ProviderFailure(.authentication, "Kimi session expired. Sign in to \(sourceLabel) again.")
+            }
             let body = try Self.body(response)
             guard let rawAccess = (body["access_token"] ?? body["accessToken"]) as? String else {
                 throw ProviderFailure(.invalidResponse, "Kimi refresh returned no valid access token.")
@@ -93,13 +178,28 @@ actor ConsumerQuotaProvider: UsageProvider {
             let rawNext = (body["refresh_token"] ?? body["refreshToken"]) as? String ?? refresh
             let next = KimiNativeSession.stripBearer(rawNext)
             guard KimiNativeSession.valid(next) else { throw ProviderFailure(.invalidResponse, "Kimi refresh returned an invalid session.") }
-            return KimiNativeSession(access: access, refresh: next, sourceLabel: session.sourceLabel)
+            return KimiNativeSession(access: access, refresh: next, sourceLabel: sourceLabel)
         }
         refreshTask = (fingerprint, task)
         defer { if refreshTask?.fingerprint == fingerprint { refreshTask = nil } }
-        let updated = try await task.value
-        kimiCache = (fingerprint, updated) // RAM only; native storage is never modified.
-        return updated
+        do {
+            let updated = try await task.value
+            kimiCache = (fingerprint, updated)
+            kimiSessionStore?.save(
+                KimiPersistedSession(
+                    seedFingerprint: seedFingerprintHex,
+                    accessToken: updated.access,
+                    refreshToken: updated.refresh,
+                    updatedAt: now()
+                ),
+                for: session.sourceLabel
+            )
+            return updated
+        } catch let failure as ProviderFailure where failure.kind == .authentication {
+            kimiCache = nil
+            kimiSessionStore?.remove(for: session.sourceLabel)
+            throw failure
+        }
     }
     private func request(_ endpoint: String, token: String, payload: Data = Data("{}".utf8)) async throws -> HTTPResponse {
         guard !token.isEmpty, !token.contains(where: { $0.isWhitespace || $0 == ";" }) else {
@@ -113,6 +213,9 @@ actor ConsumerQuotaProvider: UsageProvider {
             headers["Origin"] = "https://www.kimi.ai"
             headers["Referer"] = "https://www.kimi.ai/code/console"
             headers["Cookie"] = "kimi-auth=" + token
+            for (key, value) in KimiNativeSession.sessionHeaders(for: token) {
+                headers[key] = value
+            }
         }
         return try await http.send(HTTPRequest(method: .post, url: URL(string: endpoint)!, headers: headers, body: payload))
     }

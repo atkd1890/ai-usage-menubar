@@ -1,5 +1,65 @@
 import Foundation
 
+struct KimiJWTClaims: Equatable, Sendable {
+    let expiresAt: Date?
+    let userID: String?
+    let deviceID: String?
+    let sessionID: String?
+}
+
+struct KimiPersistedSession: Codable, Equatable, Sendable {
+    var seedFingerprint: String
+    var accessToken: String
+    var refreshToken: String?
+    var updatedAt: Date
+}
+
+struct KimiSessionStore: Sendable {
+    static let defaultPath = "~/Library/Application Support/AI Usage/kimi-auth.json"
+
+    let files: any TextFileAccessing
+    let path: String
+
+    init(
+        files: any TextFileAccessing = LocalTextFileAccessor(),
+        path: String = Self.defaultPath
+    ) {
+        self.files = files
+        self.path = path
+    }
+
+    func load(for sourceLabel: String) -> KimiPersistedSession? {
+        loadAll()[sourceLabel]
+    }
+
+    func save(_ session: KimiPersistedSession, for sourceLabel: String) {
+        var all = loadAll()
+        all[sourceLabel] = session
+        writeAll(all)
+    }
+
+    func remove(for sourceLabel: String) {
+        var all = loadAll()
+        guard all.removeValue(forKey: sourceLabel) != nil else { return }
+        writeAll(all)
+    }
+
+    private func loadAll() -> [String: KimiPersistedSession] {
+        guard files.exists(path),
+              let text = try? files.readText(path),
+              let data = text.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode([String: KimiPersistedSession].self, from: data) else {
+            return [:]
+        }
+        return decoded
+    }
+
+    private func writeAll(_ sessions: [String: KimiPersistedSession]) {
+        guard let data = try? JSONEncoder().encode(sessions) else { return }
+        try? files.writeText(path, String(decoding: data, as: UTF8.self))
+    }
+}
+
 struct KimiNativeSession: Sendable {
     let access: String
     let refresh: String?
@@ -21,6 +81,38 @@ struct KimiNativeSession: Sendable {
             return String(trimmed.dropFirst("bearer ".count)).trimmingCharacters(in: .whitespacesAndNewlines)
         }
         return trimmed
+    }
+
+    static func jwtClaims(_ token: String) -> KimiJWTClaims? {
+        let normalized = stripBearer(token)
+        let parts = normalized.split(separator: ".")
+        guard parts.count == 3,
+              let data = ProviderParsing.base64URLData(String(parts[1])),
+              let object = try? ProviderParsing.object(from: data) else {
+            return nil
+        }
+        let expiresAt = QuotaDiscovery.number(object["exp"]).map { Date(timeIntervalSince1970: $0) }
+        return KimiJWTClaims(
+            expiresAt: expiresAt,
+            userID: ProviderParsing.string(object["sub"]),
+            deviceID: ProviderParsing.string(object["device_id"]),
+            sessionID: ProviderParsing.string(object["ssid"])
+        )
+    }
+
+    static func sessionHeaders(for token: String) -> [String: String] {
+        guard let claims = jwtClaims(token) else { return [:] }
+        var headers: [String: String] = [:]
+        if let userID = claims.userID, valid(userID) {
+            headers["X-Traffic-Id"] = userID
+        }
+        if let deviceID = claims.deviceID, valid(deviceID) {
+            headers["x-msh-device-id"] = deviceID
+        }
+        if let sessionID = claims.sessionID, valid(sessionID) {
+            headers["x-msh-session-id"] = sessionID
+        }
+        return headers
     }
 
     static func load(
@@ -121,7 +213,7 @@ struct KimiNativeSession: Sendable {
             let values = try ScopedLocalStorageReader().read(directory: directory, origin: "https://www.kimi.ai", names: keys)
             let parsed = try parseTokenValues(values)
             guard let access = parsed.access else {
-                throw ProviderFailure(.authentication, "Sign in to Kimi desktop (www.kimi.ai), then refresh.")
+                throw ProviderFailure(.authentication, "Sign in to Kimi desktop, then refresh.")
             }
             return Self(access: access, refresh: parsed.refresh, sourceLabel: label)
         } catch let failure as ProviderFailure {

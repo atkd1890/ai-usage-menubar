@@ -47,6 +47,146 @@ final class ConsumerQuotaTests: XCTestCase {
             XCTAssertEqual(requests.count, allowed ? 2 : 1)
         }
     }
+    func testKimiPersistsRotatedTokensAcrossProviderRestartsAndResetsOnNewLogin() async throws {
+        let subscription = httpResponse(json: #"{"subscription":{"goods":{"title":"Free"}}}"#)
+        let stats = httpResponse(json: #"{"subscriptionBalance":{"feature":"FEATURE_OMNI","amountUsedRatio":0}}"#)
+        let files = MemoryFiles()
+        let store = KimiSessionStore(files: files)
+        let fixedNow = Date(timeIntervalSince1970: 1_800_000_000)
+
+        let http1 = MockHTTPClient([
+            httpResponse(401),
+            httpResponse(json: #"{"access_token":"new-access","refresh_token":"Bearer new-refresh"}"#),
+            subscription, stats, httpResponse(json: "{}")
+        ])
+        let provider1 = ConsumerQuotaProvider(
+            id: .kimi,
+            http: http1,
+            nativeKimi: { KimiNativeSession(access: "old-access", refresh: "old-refresh") },
+            allowRefresh: { true },
+            kimiSessionStore: store,
+            now: { fixedNow }
+        )
+        _ = try await provider1.fetch()
+        let persisted1 = try XCTUnwrap(store.load(for: "Kimi desktop"))
+        XCTAssertEqual(persisted1.accessToken, "new-access")
+        XCTAssertEqual(persisted1.refreshToken, "new-refresh")
+        XCTAssertEqual(persisted1.updatedAt, fixedNow)
+
+        // Simulate app restart with a fresh provider reading the same stale native disk tokens.
+        let http2 = MockHTTPClient([
+            subscription, stats, httpResponse(json: "{}"),
+            httpResponse(401),
+            httpResponse(json: #"{"access_token":"newer-access","refresh_token":"Bearer newer-refresh"}"#),
+            subscription, stats, httpResponse(json: "{}")
+        ])
+        let provider2 = ConsumerQuotaProvider(
+            id: .kimi,
+            http: http2,
+            nativeKimi: { KimiNativeSession(access: "old-access", refresh: "old-refresh") },
+            allowRefresh: { true },
+            kimiSessionStore: store,
+            now: { fixedNow }
+        )
+        _ = try await provider2.fetch()
+        _ = try await provider2.fetch()
+        let requests2 = await http2.capturedRequests()
+        XCTAssertEqual(requests2[0].headers["Authorization"], "Bearer new-access")
+        XCTAssertEqual(requests2[4].url.absoluteString, "https://www.kimi.ai/api/auth/token/refresh")
+        XCTAssertEqual(requests2[4].headers["Authorization"], "Bearer new-refresh")
+        XCTAssertEqual(requests2[5].headers["Authorization"], "Bearer newer-access")
+        let persisted2 = try XCTUnwrap(store.load(for: "Kimi desktop"))
+        XCTAssertEqual(persisted2.accessToken, "newer-access")
+        XCTAssertEqual(persisted2.refreshToken, "newer-refresh")
+
+        // New native login replaces/clears stale persisted entry.
+        let http3 = MockHTTPClient([subscription, stats, httpResponse(json: "{}")])
+        let provider3 = ConsumerQuotaProvider(
+            id: .kimi,
+            http: http3,
+            nativeKimi: { KimiNativeSession(access: "fresh-access", refresh: "fresh-refresh") },
+            allowRefresh: { true },
+            kimiSessionStore: store,
+            now: { fixedNow }
+        )
+        _ = try await provider3.fetch()
+        let requests3 = await http3.capturedRequests()
+        XCTAssertEqual(requests3[0].headers["Authorization"], "Bearer fresh-access")
+        XCTAssertNil(store.load(for: "Kimi desktop"))
+    }
+    func testKimiProactivelyRefreshesExpiredJWTWithSessionHeadersAndClearsPersistedOn401() async throws {
+        func makeJWT(exp: TimeInterval, sub: String, deviceID: String, ssid: String) throws -> String {
+            func b64url(_ obj: [String: Any]) throws -> String {
+                let data = try JSONSerialization.data(withJSONObject: obj)
+                return data.base64EncodedString()
+                    .replacingOccurrences(of: "+", with: "-")
+                    .replacingOccurrences(of: "/", with: "_")
+                    .replacingOccurrences(of: "=", with: "")
+            }
+            let h = try b64url(["alg": "HS256", "typ": "JWT"])
+            let p = try b64url(["exp": Int(exp), "sub": sub, "device_id": deviceID, "ssid": ssid])
+            return "\(h).\(p).sig"
+        }
+
+        let fixedNow = Date(timeIntervalSince1970: 1_800_000_000)
+        let expiredAccess = try makeJWT(exp: fixedNow.timeIntervalSince1970 - 10, sub: "usr-1", deviceID: "dev-1", ssid: "ss-1")
+        let freshRefresh = try makeJWT(exp: fixedNow.timeIntervalSince1970 + 86_400, sub: "usr-1", deviceID: "dev-1", ssid: "ss-1")
+        let freshAccess = try makeJWT(exp: fixedNow.timeIntervalSince1970 + 900, sub: "usr-1", deviceID: "dev-2", ssid: "ss-2")
+        let nextRefresh = try makeJWT(exp: fixedNow.timeIntervalSince1970 + 86_400, sub: "usr-1", deviceID: "dev-2", ssid: "ss-2")
+
+        let files = MemoryFiles()
+        let store = KimiSessionStore(files: files)
+        let subscription = httpResponse(json: #"{"subscription":{"goods":{"title":"Free"}}}"#)
+        let stats = httpResponse(json: #"{"subscriptionBalance":{"feature":"FEATURE_OMNI","amountUsedRatio":0}}"#)
+        let http = MockHTTPClient([
+            httpResponse(json: #"{"access_token":"\#(freshAccess)","refresh_token":"Bearer \#(nextRefresh)"}"#),
+            subscription, stats, httpResponse(json: "{}")
+        ])
+        let provider = ConsumerQuotaProvider(
+            id: .kimi,
+            http: http,
+            nativeKimi: { KimiNativeSession(access: expiredAccess, refresh: freshRefresh) },
+            allowRefresh: { true },
+            kimiSessionStore: store,
+            now: { fixedNow }
+        )
+        _ = try await provider.fetch()
+        let requests = await http.capturedRequests()
+        XCTAssertEqual(requests.count, 4)
+        XCTAssertEqual(requests[0].url.absoluteString, "https://www.kimi.ai/api/auth/token/refresh")
+        XCTAssertEqual(requests[0].headers["X-Traffic-Id"], "usr-1")
+        XCTAssertEqual(requests[0].headers["x-msh-device-id"], "dev-1")
+        XCTAssertEqual(requests[0].headers["x-msh-session-id"], "ss-1")
+        XCTAssertEqual(requests[1].url.absoluteString, "https://www.kimi.ai/apiv2/kimi.gateway.membership.v2.MembershipService/GetSubscription")
+        XCTAssertEqual(requests[1].headers["X-Traffic-Id"], "usr-1")
+        XCTAssertEqual(requests[1].headers["x-msh-device-id"], "dev-2")
+        XCTAssertEqual(requests[1].headers["x-msh-session-id"], "ss-2")
+        XCTAssertNotNil(store.load(for: "Kimi desktop"))
+
+        // If refresh returns 401 on another instance (at t+850s when freshAccess is expiring soon),
+        // it retries fallback native refresh once, clears the matching persisted entry, and reports expiry.
+        let httpFail = MockHTTPClient([httpResponse(401), httpResponse(401)])
+        let providerFail = ConsumerQuotaProvider(
+            id: .kimi,
+            http: httpFail,
+            nativeKimi: { KimiNativeSession(access: expiredAccess, refresh: freshRefresh) },
+            allowRefresh: { true },
+            kimiSessionStore: store,
+            now: { fixedNow.addingTimeInterval(850) }
+        )
+        do {
+            _ = try await providerFail.fetch()
+            XCTFail("Expected authentication failure")
+        } catch let failure as ProviderFailure {
+            XCTAssertEqual(failure.kind, .authentication)
+            XCTAssertEqual(failure.message, "Kimi session expired. Sign in to Kimi desktop again.")
+        }
+        let failRequests = await httpFail.capturedRequests()
+        XCTAssertEqual(failRequests.count, 2)
+        XCTAssertEqual(failRequests[0].headers["Authorization"], "Bearer \(nextRefresh)")
+        XCTAssertEqual(failRequests[1].headers["Authorization"], "Bearer \(freshRefresh)")
+        XCTAssertNil(store.load(for: "Kimi desktop"))
+    }
     func testManusDailyDoesNotCombineFreeCreditsOrInventPlan() throws {
         let value = try ConsumerQuotaProvider.manus(httpResponse(json: #"{"totalCredits":1300,"freeCredits":1000,"refreshCredits":150,"maxRefreshCredits":300,"nextRefreshTime":"2026-11-14T00:00:00Z"}"#))
         XCTAssertEqual(value.windows.first?.kind, .daily)
