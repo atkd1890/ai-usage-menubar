@@ -137,9 +137,9 @@ actor AntigravityProvider: UsageProvider {
             project: codeAssist?.project,
             now: now
         ) {
-        case let .success(bodies):
+        case let .success(summaries):
             guard let snapshot = AntigravityUsageMapper.summary(
-                bodies,
+                summaries,
                 planName: codeAssist?.plan,
                 now: dateProvider.now()
             ) else {

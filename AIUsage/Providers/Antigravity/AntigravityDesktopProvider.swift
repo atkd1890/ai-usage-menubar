@@ -112,8 +112,8 @@ actor AntigravityDesktopProvider: UsageProvider {
             }
             try Task.checkCancellation()
             switch response {
-            case let .success(bodies):
-                guard let value = AntigravityUsageMapper.summary(bodies, planName: metadata?.plan, now: now()), !value.windows.isEmpty else {
+            case let .success(summaries):
+                guard let value = AntigravityUsageMapper.summary(summaries, planName: metadata?.plan, now: now()), !value.windows.isEmpty else {
                     throw ProviderFailure(.invalidResponse, "Antigravity quota response changed.")
                 }
                 return value.withCredential(source: "Antigravity app", account: credential.email ?? credential.historyID, email: credential.email)

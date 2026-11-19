@@ -539,23 +539,33 @@ enum ProviderCatalog {
     }
 }
 
+struct QuotaSeriesReading: Equatable, Sendable, Identifiable {
+    let id: String
+    let title: String
+    let usedPercent: Double
+    let resetsAt: Date?
+}
+
 struct QuotaWindow: Identifiable, Equatable, Sendable {
     let kind: QuotaKind
     let usedPercent: Double
     let resetsAt: Date?
     let remainingCount: Double?
     let limitCount: Double?
+    let series: [QuotaSeriesReading]
 
     init(
         kind: QuotaKind,
         usedPercent: Double,
         resetsAt: Date?,
         remainingCount: Double? = nil,
-        limitCount: Double? = nil
+        limitCount: Double? = nil,
+        series: [QuotaSeriesReading] = []
     ) {
         self.kind = kind
         self.usedPercent = usedPercent
         self.resetsAt = resetsAt
+        self.series = series
         if let remaining = remainingCount, let limit = limitCount,
            remaining.isFinite, limit.isFinite, limit > 0, remaining >= 0 {
             self.remainingCount = min(remaining, limit)
@@ -708,6 +718,12 @@ struct ProviderUsageDetail: Equatable, Sendable, Identifiable {
     let value: String
 }
 
+struct ProviderQuotaSection: Equatable, Sendable, Identifiable {
+    let id: String
+    let title: String
+    let windows: [QuotaWindow]
+}
+
 struct ProviderSnapshot: Equatable, Sendable {
     let provider: ProviderID
     let planName: String?
@@ -723,7 +739,7 @@ struct ProviderSnapshot: Equatable, Sendable {
         case .claude: return "Shared account limits • Chat, Code & Cowork"
         case .codex: return "Shared account limits • Codex & ChatGPT Work"
         case .cursor: return "Product usage limits • Editor, Auto & API"
-        case .antigravity: return "Product usage limits • Gemini, 3rd-party & Argon"
+        case .antigravity: return "Separate app limits • Antigravity & Antigravity IDE"
         case .copilot: return "Monthly Copilot quota • Chat & Completions"
         case .gemini: return "Shared account limits • Gemini App & Web"
         case .manus: return "Product usage limits • Agent Tasks & Credits"
@@ -742,6 +758,7 @@ struct ProviderSnapshot: Equatable, Sendable {
     let prepaidBalance: MonetaryBalance?
     let additionalUsageEnabled: Bool?
     let usageBreakdown: ConsumptionBreakdown?
+    let quotaSections: [ProviderQuotaSection]
 
     var identityEmail: String? {
         accountEmail ?? ([ProviderID.gemini, .antigravity].contains(provider) ? AccountEmail.validated(accountLabel) : nil)
@@ -804,7 +821,8 @@ struct ProviderSnapshot: Equatable, Sendable {
         usageDetails: [ProviderUsageDetail] = [],
         prepaidBalance: MonetaryBalance? = nil,
         additionalUsageEnabled: Bool? = nil,
-        usageBreakdown: ConsumptionBreakdown? = nil
+        usageBreakdown: ConsumptionBreakdown? = nil,
+        quotaSections: [ProviderQuotaSection] = []
     ) {
         self.provider = provider
         self.planName = planName
@@ -821,11 +839,13 @@ struct ProviderSnapshot: Equatable, Sendable {
         self.prepaidBalance = prepaidBalance
         self.additionalUsageEnabled = additionalUsageEnabled
         self.usageBreakdown = usageBreakdown
+        self.quotaSections = quotaSections
     }
 
     /// Whether the panel has anything to show beyond the provider header.
     var hasPanelContent: Bool {
         !windows.isEmpty ||
+            !quotaSections.isEmpty ||
             !consumptionShares.isEmpty ||
             !usageDetails.isEmpty ||
             hasAdditionalUsageSection ||

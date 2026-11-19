@@ -168,14 +168,116 @@ final class AntigravityTests: XCTestCase {
             daily + AntigravityUsageClient.summaryPath: [httpResponse(json: withArgonJSON)]
         ])
         let outcome = await AntigravityUsageClient(http: http).quotaSummary(accessToken: "test", project: nil, now: now)
-        guard case .success(let bodies) = outcome else { return XCTFail("Expected quota bodies") }
-        XCTAssertEqual(bodies.count, 2)
-        let snapshot = try XCTUnwrap(AntigravityUsageMapper.summary(bodies, planName: nil, now: now))
+        guard case .success(let summaries) = outcome else { return XCTFail("Expected quota summaries") }
+        XCTAssertEqual(summaries.count, 2)
+        XCTAssertEqual(summaries.map(\.host), [.ide, .app])
+        let snapshot = try XCTUnwrap(AntigravityUsageMapper.summary(summaries, planName: nil, now: now))
         let argon = try XCTUnwrap(snapshot.windows.first { $0.kind == .argonWeekly })
         XCTAssertEqual(argon.usedPercent, 99.17)
         XCTAssertEqual(argon.resetsAt, ISO8601DateFormatter().date(from: "2026-11-18T10:06:53Z"))
         let requests = await http.capturedRequests()
         XCTAssertTrue(requests.allSatisfy { $0.headers["User-Agent"]?.hasPrefix("antigravity/hub/") == true })
+    }
+
+    func testDualHostSummaryBuildsMergedRow1AndSeparateAppAndIDESections() throws {
+        let appBody = Data("""
+        {"groups":[
+          {"displayName":"Gemini Models","buckets":[
+            {"bucketId":"gemini-5h","window":"5h","remainingFraction":0.90293604,"resetTime":"2026-11-19T07:10:14Z"},
+            {"bucketId":"gemini-weekly","window":"weekly","remainingFraction":0.850154,"resetTime":"2026-11-25T00:02:41Z"}
+          ]},
+          {"displayName":"Claude and GPT models","buckets":[
+            {"bucketId":"3p-5h","window":"5h","remainingFraction":1},
+            {"bucketId":"3p-weekly","window":"weekly","remainingFraction":1}
+          ]},
+          {"displayName":"Gemini 4 Argon","buckets":[
+            {"bucketId":"gemini-argon-wtu-weekly","window":"weekly","remainingFraction":0.21893626,"resetTime":"2026-11-25T00:02:00Z"}
+          ]}
+        ]}
+        """.utf8)
+        let ideBody = Data("""
+        {"groups":[
+          {"displayName":"Gemini Models","buckets":[
+            {"bucketId":"gemini-5h","window":"5h","remainingFraction":1,"resetTime":"2026-11-19T07:25:03Z"},
+            {"bucketId":"gemini-weekly","window":"weekly","remainingFraction":1,"resetTime":"2026-11-25T10:15:48Z"}
+          ]},
+          {"displayName":"Claude and GPT models","buckets":[
+            {"bucketId":"3p-5h","window":"5h","remainingFraction":1},
+            {"bucketId":"3p-weekly","window":"weekly","remainingFraction":0.7359272,"resetTime":"2026-11-20T14:41:49Z"}
+          ]},
+          {"displayName":"Gemini 4 Argon","buckets":[
+            {"bucketId":"gemini-argon-wtu-weekly","window":"weekly","remainingFraction":1,"resetTime":"2026-11-25T10:06:53Z"}
+          ]}
+        ]}
+        """.utf8)
+
+        let snapshot = try XCTUnwrap(AntigravityUsageMapper.summary(
+            [
+                AntigravityHostSummary(host: .ide, data: ideBody),
+                AntigravityHostSummary(host: .app, data: appBody)
+            ],
+            planName: "Google AI Pro",
+            now: now
+        ))
+
+        XCTAssertEqual(snapshot.dashboardSubtitle, "Separate app limits • Antigravity & Antigravity IDE")
+        XCTAssertEqual(snapshot.windows.map(\.kind), [.session, .weekly, .claudePool, .claudePoolWeekly, .argonWeekly])
+        XCTAssertEqual(snapshot.windows[0].usedPercent, 9.71)
+        XCTAssertEqual(snapshot.windows[0].series.map(\.id), ["antigravity-app", "antigravity-ide"])
+        XCTAssertEqual(snapshot.windows[0].series.map(\.usedPercent), [9.71, 0])
+        XCTAssertEqual(snapshot.windows[1].usedPercent, 14.98)
+        XCTAssertEqual(snapshot.windows[1].series.map(\.usedPercent), [14.98, 0])
+        XCTAssertEqual(snapshot.windows[3].usedPercent, 26.41)
+        XCTAssertEqual(snapshot.windows[4].usedPercent, 78.11)
+
+        XCTAssertEqual(snapshot.quotaSections.map(\.title), ["Antigravity", "Antigravity IDE"])
+        XCTAssertEqual(snapshot.quotaSections[0].windows.map(\.usedPercent), [9.71, 14.98, 0, 0, 78.11])
+        XCTAssertEqual(snapshot.quotaSections[1].windows.map(\.usedPercent), [0, 0, 0, 26.41, 0])
+        for section in snapshot.quotaSections {
+            XCTAssertEqual(
+                ProviderDetailsLayout.rows(section.windows).map { $0.map(\.kind) },
+                [[.session, .weekly], [.claudePool, .claudePoolWeekly], [.argonWeekly]]
+            )
+        }
+
+        let credentialed = snapshot.withCredential(source: "Antigravity app", account: "user@example.com")
+        XCTAssertEqual(credentialed.quotaSections, snapshot.quotaSections)
+    }
+
+    func testSingleHostSummaryDoesNotCreateDuplicateSections() throws {
+        let snapshot = try XCTUnwrap(AntigravityUsageMapper.summary(
+            [AntigravityHostSummary(host: .app, data: Data(withArgonJSON.utf8))],
+            planName: nil,
+            now: now
+        ))
+
+        XCTAssertEqual(snapshot.quotaSections, [])
+        XCTAssertEqual(snapshot.windows.first?.series, [])
+    }
+
+    func testDualQuotaBarLayoutPlacesLongerBarUnderneathAndSplitsEqualBars() {
+        let series = [
+            QuotaSeriesReading(id: "antigravity-app", title: "Antigravity", usedPercent: 9.71, resetsAt: nil),
+            QuotaSeriesReading(id: "antigravity-ide", title: "Antigravity IDE", usedPercent: 0, resetsAt: nil)
+        ]
+
+        let remaining = DualQuotaBarLayout.layout(series: series, displayMode: .remaining)
+        XCTAssertFalse(remaining.splitEqual)
+        XCTAssertEqual(remaining.layers.map(\.id), ["antigravity-ide", "antigravity-app"])
+
+        let used = DualQuotaBarLayout.layout(series: series, displayMode: .used)
+        XCTAssertFalse(used.splitEqual)
+        XCTAssertEqual(used.layers.map(\.id), ["antigravity-app", "antigravity-ide"])
+
+        let equalUnused = DualQuotaBarLayout.layout(
+            series: [
+                QuotaSeriesReading(id: "antigravity-app", title: "Antigravity", usedPercent: 0, resetsAt: nil),
+                QuotaSeriesReading(id: "antigravity-ide", title: "Antigravity IDE", usedPercent: 0, resetsAt: nil)
+            ],
+            displayMode: .remaining
+        )
+        XCTAssertTrue(equalUnused.splitEqual)
+        XCTAssertEqual(equalUnused.layers.map(\.id), ["antigravity-app", "antigravity-ide"])
     }
 
     // MARK: - Cloud Code client
@@ -192,10 +294,11 @@ final class AntigravityTests: XCTestCase {
             now: now
         )
 
-        guard case let .success(bodies) = outcome else {
+        guard case let .success(summaries) = outcome else {
             return XCTFail("Expected a summary, got \(outcome)")
         }
-        XCTAssertEqual(bodies.count, 1)
+        XCTAssertEqual(summaries.count, 1)
+        XCTAssertEqual(summaries.first?.host, .ide)
         let requests = await http.capturedRequests()
         XCTAssertEqual(requests.count, 2)
         XCTAssertEqual(requests[0].headers["User-Agent"], AntigravityUsageClient.quotaSummaryUserAgent)
@@ -220,10 +323,11 @@ final class AntigravityTests: XCTestCase {
             now: now
         )
 
-        guard case let .success(bodies) = outcome else {
+        guard case let .success(summaries) = outcome else {
             return XCTFail("Expected summaries, got \(outcome)")
         }
-        XCTAssertEqual(bodies.count, 2)
+        XCTAssertEqual(summaries.count, 2)
+        XCTAssertEqual(summaries.map(\.host), [.ide, .app])
         let body = await http.capturedRequests().first?.body
         XCTAssertEqual(body, Data("{}".utf8))
     }

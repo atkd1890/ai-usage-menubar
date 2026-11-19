@@ -12,10 +12,41 @@ enum AntigravityCodeAssistOutcome: Sendable {
     case unavailable
 }
 
+enum AntigravityHost: String, Equatable, Sendable, CaseIterable {
+    case app // Antigravity (v2 Hub) -> daily-cloudcode-pa.googleapis.com
+    case ide // Antigravity IDE -> cloudcode-pa.googleapis.com
+
+    var baseURL: String {
+        switch self {
+        case .app: "https://daily-cloudcode-pa.googleapis.com"
+        case .ide: "https://cloudcode-pa.googleapis.com"
+        }
+    }
+
+    var seriesID: String {
+        switch self {
+        case .app: "antigravity-app"
+        case .ide: "antigravity-ide"
+        }
+    }
+
+    var displayName: String {
+        switch self {
+        case .app: "Antigravity"
+        case .ide: "Antigravity IDE"
+        }
+    }
+}
+
+struct AntigravityHostSummary: Equatable, Sendable {
+    let host: AntigravityHost
+    let data: Data
+}
+
 /// The result of `retrieveUserQuotaSummary` across both Cloud Code hosts.
 enum AntigravitySummaryOutcome: Sendable {
-    /// Every successful body, production host first.
-    case success([Data])
+    /// Every successful body tagged with its source host, production host first.
+    case success([AntigravityHostSummary])
     /// `401`: the access token itself was refused.
     case tokenRefused
     /// `403`: the token is valid, but Google does not share quota for this
@@ -161,8 +192,9 @@ struct AntigravityUsageClient: Sendable {
             payload = Data("{}".utf8)
         }
 
-        var responses: [HTTPResponse] = []
+        var responses: [(host: AntigravityHost, response: HTTPResponse)] = []
         for base in Self.cloudBases {
+            let host: AntigravityHost = base == AntigravityHost.app.baseURL ? .app : .ide
             guard let url = URL(string: base + Self.summaryPath),
                   let response = try? await http.send(request(
                       url: url,
@@ -172,16 +204,16 @@ struct AntigravityUsageClient: Sendable {
                   )) else {
                 continue
             }
-            responses.append(response)
+            responses.append((host, response))
         }
 
-        let bodies = responses
-            .filter { (200..<300).contains($0.statusCode) }
-            .map(\.body)
-        if !bodies.isEmpty {
-            return .success(bodies)
+        let summaries = responses
+            .filter { (200..<300).contains($0.response.statusCode) }
+            .map { AntigravityHostSummary(host: $0.host, data: $0.response.body) }
+        if !summaries.isEmpty {
+            return .success(summaries)
         }
-        if responses.contains(where: { $0.statusCode == 401 }) {
+        if responses.contains(where: { $0.response.statusCode == 401 }) {
             return .tokenRefused
         }
         // A 403 only means "Google does not share this account's quota" when
@@ -189,13 +221,13 @@ struct AntigravityUsageClient: Sendable {
         // host is a transient state, not an account-level denial.
         let everyHostDenied =
             responses.count == Self.cloudBases.count &&
-            responses.allSatisfy { $0.statusCode == 403 }
+            responses.allSatisfy { $0.response.statusCode == 403 }
         if everyHostDenied {
             return .denied
         }
-        if let limited = responses.first(where: { $0.statusCode == 429 }) {
+        if let limited = responses.first(where: { $0.response.statusCode == 429 }) {
             return .rateLimited(
-                retryAt: ProviderParsing.retryDate(from: limited, now: now)
+                retryAt: ProviderParsing.retryDate(from: limited.response, now: now)
             )
         }
         return .unavailable

@@ -21,6 +21,104 @@ enum AntigravityUsageMapper {
         "g1-ultra-lite-tier": "Google AI Ultra Lite"
     ]
 
+    /// Maps host-tagged `RetrieveUserQuotaSummary` responses. When both
+    /// `Antigravity` (`daily`) and `Antigravity IDE` (`prod`) respond with
+    /// quota windows, Row 1 (`session` / `weekly`) combines both into dual-series
+    /// readings while `quotaSections` exposes each app's full breakdown.
+    static func summary(
+        _ hostSummaries: [AntigravityHostSummary],
+        planName: String?,
+        now: Date
+    ) -> ProviderSnapshot? {
+        var parsedByHost: [AntigravityHost: (windows: [QuotaWindow], notices: [ProviderUsageDetail])] = [:]
+        for item in hostSummaries where parsedByHost[item.host] == nil {
+            if let parsed = parseSingleBody(item.data) {
+                parsedByHost[item.host] = parsed
+            }
+        }
+        let orderedHosts: [AntigravityHost] = [.app, .ide]
+        let presentHosts = orderedHosts.filter { parsedByHost[$0] != nil }
+        guard !presentHosts.isEmpty else { return nil }
+
+        if presentHosts.count == 1, let onlyHost = presentHosts.first, let parsed = parsedByHost[onlyHost] {
+            return ProviderSnapshot(
+                provider: .antigravity,
+                planName: planName,
+                windows: parsed.windows,
+                fetchedAt: now,
+                usageScope: "Antigravity quota · separate from Gemini app",
+                usageDetails: parsed.notices
+            )
+        }
+
+        let sections = orderedHosts.compactMap { host -> ProviderQuotaSection? in
+            guard let parsed = parsedByHost[host], !parsed.windows.isEmpty else { return nil }
+            return ProviderQuotaSection(id: host.seriesID, title: host.displayName, windows: parsed.windows)
+        }
+        let quotaSections = sections.count >= 2 ? sections : []
+
+        var mergedWindows: [QuotaWindow] = []
+        for kind in [QuotaKind.session, .weekly] {
+            let matches = orderedHosts.compactMap { host -> (host: AntigravityHost, window: QuotaWindow)? in
+                guard let window = parsedByHost[host]?.windows.first(where: { $0.kind == kind }) else { return nil }
+                return (host, window)
+            }
+            guard !matches.isEmpty else { continue }
+            let series: [QuotaSeriesReading] = matches.count >= 2
+                ? matches.map {
+                    QuotaSeriesReading(
+                        id: $0.host.seriesID,
+                        title: $0.host.displayName,
+                        usedPercent: $0.window.usedPercent,
+                        resetsAt: $0.window.resetsAt
+                    )
+                }
+                : []
+            let usedPercent = matches.map(\.window.usedPercent).max() ?? 0
+            let consumedResets = matches.filter { $0.window.usedPercent > 0 }.compactMap(\.window.resetsAt)
+            let resetsAt = consumedResets.min() ?? matches.compactMap(\.window.resetsAt).min()
+            mergedWindows.append(QuotaWindow(kind: kind, usedPercent: usedPercent, resetsAt: resetsAt, series: series))
+        }
+
+        for kind in [QuotaKind.claudePool, .claudePoolWeekly, .argonWeekly] {
+            let matches = orderedHosts.compactMap { host in
+                parsedByHost[host]?.windows.first(where: { $0.kind == kind })
+            }
+            if let best = matches.dropFirst().reduce(matches.first, { current, candidate in
+                guard let current else { return candidate }
+                return candidate.usedPercent > current.usedPercent ? candidate : current
+            }) {
+                mergedWindows.append(best)
+            }
+        }
+
+        for host in orderedHosts {
+            for window in parsedByHost[host]?.windows ?? [] where !order.contains(window.kind) {
+                if !mergedWindows.contains(where: { $0.kind == window.kind }) {
+                    mergedWindows.append(window)
+                }
+            }
+        }
+
+        var notices: [ProviderUsageDetail] = []
+        var seenNoticeIDs: Set<String> = []
+        for host in orderedHosts {
+            for detail in parsedByHost[host]?.notices ?? [] where seenNoticeIDs.insert(detail.id).inserted {
+                notices.append(detail)
+            }
+        }
+
+        return ProviderSnapshot(
+            provider: .antigravity,
+            planName: planName,
+            windows: mergedWindows,
+            fetchedAt: now,
+            usageScope: "Antigravity quota · separate from Gemini app",
+            usageDetails: notices,
+            quotaSections: quotaSections
+        )
+    }
+
     /// Maps one or more `RetrieveUserQuotaSummary` bodies, merged by bucket id
     /// with the first usable bucket winning. A host can omit a whole pool, so
     /// no single body is trusted to be complete. Returns `nil` only when no
@@ -33,7 +131,26 @@ enum AntigravityUsageMapper {
     ) -> ProviderSnapshot? {
         let groupLists = bodies.compactMap(groups)
         guard !groupLists.isEmpty else { return nil }
+        let parsed = parseGroupLists(groupLists)
 
+        return ProviderSnapshot(
+            provider: .antigravity,
+            planName: planName,
+            windows: parsed.windows,
+            fetchedAt: now,
+            usageScope: "Antigravity quota · separate from Gemini app",
+            usageDetails: parsed.notices
+        )
+    }
+
+    private static func parseSingleBody(_ data: Data) -> (windows: [QuotaWindow], notices: [ProviderUsageDetail])? {
+        guard let groups = groups(data) else { return nil }
+        return parseGroupLists([groups])
+    }
+
+    private static func parseGroupLists(
+        _ groupLists: [[[String: Any]]]
+    ) -> (windows: [QuotaWindow], notices: [ProviderUsageDetail]) {
         var windows: [QuotaWindow] = []
         for group in groupLists.joined()
         where ProviderParsing.string(group["displayName"]) != argonGroupName {
@@ -72,17 +189,11 @@ enum AntigravityUsageMapper {
             }
         }
 
-        return ProviderSnapshot(
-            provider: .antigravity,
-            planName: planName,
-            windows: windows.sorted {
-                (order.firstIndex(of: $0.kind) ?? order.count) <
-                    (order.firstIndex(of: $1.kind) ?? order.count)
-            },
-            fetchedAt: now,
-            usageScope: "Antigravity quota · separate from Gemini app",
-            usageDetails: notices
-        )
+        let sortedWindows = windows.sorted {
+            (order.firstIndex(of: $0.kind) ?? order.count) <
+                (order.firstIndex(of: $1.kind) ?? order.count)
+        }
+        return (sortedWindows, notices)
     }
 
     /// A shared-pool-only answer can omit Argon. Stop host fallback only once

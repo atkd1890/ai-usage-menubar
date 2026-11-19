@@ -43,26 +43,76 @@ struct ProviderSectionView: View {
         VStack(alignment: .leading, spacing: 0) {
             if part != .details { providerHeader }
             if part != .details, !embedded, let scope = state.snapshot?.dashboardSubtitle {
-                Text(scope)
+                let summarySeries = state.snapshot.flatMap {
+                    Array(ProviderDetailsLayout.windows($0, expanded: true).prefix(2))
+                        .first(where: { $0.series.count >= 2 })?.series
+                } ?? []
+                if !summarySeries.isEmpty {
+                    HStack(spacing: 4) {
+                        Text("Separate app limits •")
+                        ForEach(Array(summarySeries.enumerated()), id: \.element.id) { index, item in
+                            if index > 0 {
+                                Text("&")
+                            }
+                            HStack(spacing: 3.5) {
+                                Circle()
+                                    .fill(QuotaSeriesColor.color(item.id))
+                                    .frame(width: 5, height: 5)
+                                Text(item.title)
+                            }
+                        }
+                    }
                     .font(.caption2)
                     .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(1)
                     .padding(.horizontal, 13)
                     .padding(.bottom, 3.5)
+                    .help("Antigravity and Antigravity IDE have separate quota pools. Each summary bar overlays both apps with the longer bar underneath so both remain visible.")
+                } else {
+                    Text(scope)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 13)
+                        .padding(.bottom, 3.5)
+                }
             }
             if let snapshot = state.snapshot, snapshot.hasPanelContent {
                 let ordered = ProviderDetailsLayout.windows(snapshot, expanded: true)
-                let windows = part == .summary ? Array(ordered.prefix(2)) : part == .details ? Array(ordered.dropFirst(2)) : ProviderDetailsLayout.windows(snapshot, expanded: showsDetails)
+                let windows: [QuotaWindow] = if !snapshot.quotaSections.isEmpty {
+                    part == .details ? [] : Array(ordered.prefix(2))
+                } else {
+                    part == .summary ? Array(ordered.prefix(2)) : part == .details ? Array(ordered.dropFirst(2)) : ProviderDetailsLayout.windows(snapshot, expanded: showsDetails)
+                }
                 if !windows.isEmpty {
                     QuotaGrid(windows: windows, displayMode: displayMode)
                         .padding(.horizontal, 6)
                         .padding(.bottom, 4.5)
                 }
                 if part == .details || (part == .all && showsDetails) {
+                    ForEach(snapshot.quotaSections) { section in
+                        Divider()
+                            .padding(.horizontal, 16)
+                            .padding(.top, 1.5)
+                            .padding(.bottom, 5.5)
+                        HStack(spacing: 5) {
+                            Circle()
+                                .fill(QuotaSeriesColor.color(section.id))
+                                .frame(width: 5, height: 5)
+                            Text(section.title)
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 13)
+                        .padding(.bottom, 2)
+                        QuotaGrid(windows: section.windows, displayMode: displayMode)
+                            .padding(.horizontal, 6)
+                            .padding(.bottom, 4.5)
+                    }
                     if !snapshot.consumptionShares.isEmpty {
                         ConsumedUsageBreakdown(shares: snapshot.consumptionShares)
                     }
-                    if (!snapshot.windows.isEmpty || !snapshot.consumptionShares.isEmpty) &&
+                    if (!snapshot.windows.isEmpty || !snapshot.quotaSections.isEmpty || !snapshot.consumptionShares.isEmpty) &&
                         (snapshot.hasAdditionalUsageSection || (snapshot.resets?.availableCount ?? 0) > 0 || !snapshot.usageDetails.isEmpty) {
                         Divider()
                             .padding(.horizontal, 16)
@@ -487,29 +537,74 @@ private struct QuotaTile: View {
                         .font(.caption.weight(.medium))
                         .lineLimit(1)
                     Spacer(minLength: 3)
-                    HStack(alignment: .firstTextBaseline, spacing: 3) {
-                        Text(percentText)
-                            .font(.title3.monospacedDigit().weight(.semibold))
-                            .foregroundStyle(valueTint)
-                        Text(displayMode.valueSuffix)
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(.secondary)
+                    if window.series.count >= 2 {
+                        HStack(alignment: .firstTextBaseline, spacing: 2.5) {
+                            ForEach(Array(window.series.enumerated()), id: \.element.id) { index, reading in
+                                if index > 0 {
+                                    Text("/")
+                                        .font(.caption2.weight(.medium))
+                                        .foregroundStyle(.tertiary)
+                                }
+                                Text(formattedPercent(for: reading.usedPercent))
+                                    .font(.callout.monospacedDigit().weight(.semibold))
+                                    .foregroundStyle(QuotaSeriesColor.color(reading.id))
+                            }
+                            Text(displayMode.valueSuffix)
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(.secondary)
+                        }
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                    } else {
+                        HStack(alignment: .firstTextBaseline, spacing: 3) {
+                            Text(percentText)
+                                .font(.title3.monospacedDigit().weight(.semibold))
+                                .foregroundStyle(valueTint)
+                            Text(displayMode.valueSuffix)
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(.secondary)
+                        }
+                        .lineLimit(1)
                     }
-                    .lineLimit(1)
                 }
 
                 GeometryReader { geometry in
                     ZStack(alignment: .leading) {
                         Capsule()
                             .fill(.primary.opacity(0.1))
-                        Capsule()
-                            .fill(progressTint)
-                            .frame(
-                                width: geometry.size.width *
-                                    displayMode.renderedFraction(
-                                        from: window.usedPercent
-                                    )
+                        if window.series.count >= 2 {
+                            let barLayout = DualQuotaBarLayout.layout(
+                                series: window.series,
+                                displayMode: displayMode
                             )
+                            if barLayout.splitEqual {
+                                VStack(spacing: 0) {
+                                    ForEach(barLayout.layers, id: \.id) { layer in
+                                        Rectangle()
+                                            .fill(QuotaSeriesColor.color(layer.id))
+                                    }
+                                }
+                                .frame(width: geometry.size.width * barLayout.layers[0].fraction)
+                                .clipShape(Capsule())
+                            } else {
+                                ForEach(barLayout.layers, id: \.id) { layer in
+                                    if layer.fraction > 0 {
+                                        Capsule()
+                                            .fill(QuotaSeriesColor.color(layer.id))
+                                            .frame(width: geometry.size.width * layer.fraction)
+                                    }
+                                }
+                            }
+                        } else {
+                            Capsule()
+                                .fill(progressTint)
+                                .frame(
+                                    width: geometry.size.width *
+                                        displayMode.renderedFraction(
+                                            from: window.usedPercent
+                                        )
+                                )
+                        }
                     }
                 }
                 .frame(height: 4)
@@ -546,7 +641,11 @@ private struct QuotaTile: View {
     }
 
     private var percentText: String {
-        let value = displayMode.displayedPercent(from: window.usedPercent)
+        formattedPercent(for: window.usedPercent)
+    }
+
+    private func formattedPercent(for usedPercent: Double) -> String {
+        let value = displayMode.displayedPercent(from: usedPercent)
         if value.rounded() == value {
             return "\(Int(value))%"
         }
@@ -571,7 +670,14 @@ private struct QuotaTile: View {
     }
 
     private func accessibilityValue(relativeTo now: Date) -> String {
-        let usage = "\(percentText) \(displayMode.valueSuffix)"
+        let usage: String
+        if window.series.count >= 2 {
+            usage = window.series.map { reading in
+                "\(reading.title) \(formattedPercent(for: reading.usedPercent)) \(displayMode.valueSuffix)"
+            }.joined(separator: ", ")
+        } else {
+            usage = "\(percentText) \(displayMode.valueSuffix)"
+        }
         guard let reset = window.resetsAt else {
             return usage
         }
@@ -652,6 +758,52 @@ private struct FailureRow: View {
         case .transient, .invalidResponse, .storage:
             "exclamationmark.triangle"
         }
+    }
+}
+
+enum QuotaSeriesColor {
+    static func color(_ id: String) -> Color {
+        switch id {
+        case "antigravity-app": Color(nsColor: .systemBlue)
+        case "antigravity-ide": Color(nsColor: .systemPurple)
+        default: Color(nsColor: .systemTeal)
+        }
+    }
+}
+
+struct DualQuotaBarLayer: Equatable {
+    let id: String
+    let fraction: Double
+}
+
+enum DualQuotaBarLayout {
+    /// Returns layers ordered back-to-front (longest first so it sits underneath and
+    /// never covers the shorter bar), plus whether equal non-zero bars should split
+    /// vertically so both colors remain visible.
+    static func layout(
+        series: [QuotaSeriesReading],
+        displayMode: UsageDisplayMode
+    ) -> (layers: [DualQuotaBarLayer], splitEqual: Bool) {
+        let raw = series.map {
+            DualQuotaBarLayer(
+                id: $0.id,
+                fraction: displayMode.renderedFraction(from: $0.usedPercent)
+            )
+        }
+        if raw.count == 2,
+           raw[0].fraction > 0,
+           abs(raw[0].fraction - raw[1].fraction) < 0.005 {
+            return (raw, true)
+        }
+        let ordered = raw.enumerated()
+            .sorted { lhs, rhs in
+                if lhs.element.fraction != rhs.element.fraction {
+                    return lhs.element.fraction > rhs.element.fraction
+                }
+                return lhs.offset < rhs.offset
+            }
+            .map(\.element)
+        return (ordered, false)
     }
 }
 
@@ -821,7 +973,7 @@ enum ProviderDetailsLayout {
         return expanded ? ordered : Array(ordered.prefix(2))
     }
     static func canExpand(_ snapshot: ProviderSnapshot) -> Bool {
-        snapshot.windows.count > 2 || !snapshot.consumptionShares.isEmpty || snapshot.hasAdditionalUsageSection ||
+        snapshot.windows.count > 2 || !snapshot.quotaSections.isEmpty || !snapshot.consumptionShares.isEmpty || snapshot.hasAdditionalUsageSection ||
             (snapshot.resets?.availableCount ?? 0) > 0 || !snapshot.usageDetails.isEmpty
     }
 }

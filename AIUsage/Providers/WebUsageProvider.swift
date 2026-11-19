@@ -192,6 +192,7 @@ extension ProviderSnapshot {
              credentialSource: source, accountLabel: account ?? accountLabel,
              accountEmail: email ?? accountEmail, usageScope: usageScope,
              usageDetails: usageDetails, prepaidBalance: prepaidBalance,
-             additionalUsageEnabled: additionalUsageEnabled, usageBreakdown: usageBreakdown)
+             additionalUsageEnabled: additionalUsageEnabled, usageBreakdown: usageBreakdown,
+             quotaSections: quotaSections)
     }
 }
