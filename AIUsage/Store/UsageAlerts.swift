@@ -40,7 +40,7 @@ nonisolated enum AlertRules {
         }
     }
     static func paidStarted(old: ProviderSnapshot, new: ProviderSnapshot) -> Bool {
-        guard (old.windows + new.windows).contains(where: { $0.usedPercent >= 100 }) else { return false }
+        guard (old.windows + new.windows).contains(where: { $0.isBoundedActive && $0.usedPercent >= 100 }) else { return false }
         if let before = spent(old) ?? (old.additionalUsageEnabled == false ? 0 : nil), let after = spent(new), before <= 0, after > 0 { return true }
         if let before = old.displayedBalance, let after = new.displayedBalance,
            before.currencyCode == after.currencyCode, before.amount > after.amount { return true }
@@ -66,7 +66,7 @@ nonisolated enum AlertRules {
         let account = "\(snapshot.provider.rawValue)|\(snapshot.credentialSource ?? "selected")|\(email)"
         defer { previous[account] = snapshot }
         let old = previous[account]
-        for window in snapshot.windows {
+        for window in snapshot.windows where window.isBoundedActive {
             let key = account + "|" + window.kind.rawValue
             let reading = AlertReading(date: snapshot.fetchedAt, used: window.usedPercent, reset: window.resetsAt)
             var history = samples[key] ?? []
@@ -79,7 +79,7 @@ nonisolated enum AlertRules {
                 send(id: cycle + "|pace", title: "\(snapshot.displayName) may run out soon",
                      body: "\(window.kind.title) may run out around \(projected.formatted(date: .omitted, time: .shortened)), before its reset.")
             }
-            if settings.limitBack, let before = old?.windows.first(where: { $0.kind == window.kind }), before.usedPercent >= 100, window.usedPercent < 100 {
+            if settings.limitBack, let before = old?.windows.first(where: { $0.isBoundedActive && $0.kind == window.kind }), before.usedPercent >= 100, window.usedPercent < 100 {
                 send(id: cycle + "|back", title: "\(snapshot.displayName) is available again", body: "\(window.kind.title) is no longer capped.")
             }
         }

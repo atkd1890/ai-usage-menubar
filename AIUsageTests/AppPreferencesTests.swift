@@ -29,7 +29,12 @@ final class AppPreferencesTests: XCTestCase {
         XCTAssertEqual(ProviderLoginMethod.supported(for: .manus), [.desktop, .edge, .chrome])
         XCTAssertEqual(ProviderLoginMethod.supported(for: .muse), [.edge, .chrome])
         XCTAssertEqual(ProviderLoginMethod.supported(for: .kimi), [.desktop, .edge, .chrome])
+        XCTAssertEqual(ProviderLoginMethod.supported(for: .minimax), [.desktop, .edge, .chrome])
+        XCTAssertEqual(ProviderLoginMethod.supported(for: .qoder), [.desktop, .edge, .chrome])
         XCTAssertEqual(ProviderLoginMethod.supported(for: .copilot), [.editorFallback, .editor, .cli])
+        XCTAssertEqual(ProviderLoginMethod.cli.title(for: .codex), "Desktop app / Local OAuth")
+        XCTAssertEqual(ProviderLoginMethod.cli.title(for: .claude), "Local OAuth")
+        XCTAssertEqual(ProviderLoginMethod.editorFallback.title(for: .copilot), "Local OAuth / GitHub CLI")
         let preferences = AppPreferences(defaults: defaults)
         preferences.setLoginMethod(.edge, for: .manus)
         XCTAssertEqual(AppPreferences(defaults: defaults).loginMethod(for: .manus), .edge)
@@ -487,7 +492,7 @@ final class AppPreferencesTests: XCTestCase {
         let firstUpdatedRun = AppPreferences(defaults: defaults)
         XCTAssertEqual(
             firstUpdatedRun.trackedProviderIDs,
-            [.claude, .cursor, .antigravity, .copilot, .gemini, .manus, .kimi, .muse, .qwen, .adobe]
+            [.claude, .cursor, .antigravity, .copilot, .gemini, .manus, .kimi, .muse, .qwen, .adobe, .minimax, .qoder]
         )
 
         firstUpdatedRun.setTracking(false, for: .copilot)
@@ -534,7 +539,7 @@ final class AppPreferencesTests: XCTestCase {
         }
         XCTAssertEqual(
             AppPreferences(defaults: defaults).trackedProviderIDs,
-            [.claude, .codex, .gemini, .manus, .kimi, .muse, .qwen, .adobe]
+            [.claude, .codex, .gemini, .manus, .kimi, .muse, .qwen, .adobe, .minimax, .qoder]
         )
     }
 
@@ -542,6 +547,7 @@ final class AppPreferencesTests: XCTestCase {
     func testInvalidStoredScalarValuesFallBackSafely() {
         defaults.set("unknown", forKey: "menuBarSelection")
         defaults.set("unknown", forKey: "menuBarWindow")
+        defaults.set("unknown", forKey: "selectedProviderRegion.v1")
         defaults.set("unknown", forKey: "usageDisplayMode")
         defaults.set("unknown", forKey: "refreshInterval")
 
@@ -550,6 +556,7 @@ final class AppPreferencesTests: XCTestCase {
             availableItemsByProvider: availableItemsByProvider
         )
 
+        XCTAssertEqual(preferences.selectedRegion, .us)
         XCTAssertEqual(preferences.usageDisplayMode, .remaining)
         XCTAssertEqual(preferences.refreshInterval, .fiveMinutes)
         XCTAssertEqual(
@@ -560,6 +567,33 @@ final class AppPreferencesTests: XCTestCase {
             preferences.selectedMenuBarMetrics(for: .codex),
             [.weekly]
         )
+    }
+
+    @MainActor
+    func testSelectedRegionDefaultsPersistsAndPartitionsEnabledProviders() {
+        let initial = AppPreferences(defaults: defaults)
+        XCTAssertEqual(ProviderRegion.defaultSelection, .us)
+        XCTAssertEqual(ProviderRegion.allCases, [.us, .cn])
+        XCTAssertEqual(ProviderRegion.us.badgeTitle, "🇺🇸 US")
+        XCTAssertEqual(ProviderRegion.cn.badgeTitle, "🇨🇳 CN")
+        XCTAssertEqual(initial.selectedRegion, .us)
+
+        initial.selectedRegion = .cn
+        XCTAssertEqual(defaults.string(forKey: "selectedProviderRegion.v1"), "cn")
+        XCTAssertEqual(AppPreferences(defaults: defaults).selectedRegion, .cn)
+
+        let usProviders = ProviderID.enabledCases.filter { $0.region == .us }
+        let cnProviders = ProviderID.enabledCases.filter { $0.region == .cn }
+        XCTAssertEqual(
+            Set(usProviders),
+            [.claude, .codex, .cursor, .antigravity, .copilot, .gemini, .muse, .adobe]
+        )
+        XCTAssertEqual(
+            Set(cnProviders),
+            [.manus, .kimi, .qwen, .minimax, .qoder]
+        )
+        XCTAssertTrue(Set(usProviders).isDisjoint(with: Set(cnProviders)))
+        XCTAssertEqual(Set(usProviders).union(cnProviders), Set(ProviderID.enabledCases))
     }
 
     private var availableItemsByProvider:

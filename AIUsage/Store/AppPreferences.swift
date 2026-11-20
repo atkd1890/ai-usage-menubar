@@ -92,6 +92,12 @@ final class AppPreferences {
 
     let alerts: AlertPreferences
 
+    var selectedRegion: ProviderRegion {
+        didSet {
+            defaults.set(selectedRegion.rawValue, forKey: Key.selectedRegion)
+        }
+    }
+
     var usageDisplayMode: UsageDisplayMode {
         didSet {
             defaults.set(usageDisplayMode.rawValue, forKey: Key.usageDisplayMode)
@@ -160,6 +166,14 @@ final class AppPreferences {
         if defaults.object(forKey: "adobeProviderAdded.v1") == nil {
             initialTrackedProviders.insert(.adobe)
             defaults.set(true, forKey: "adobeProviderAdded.v1")
+        }
+        if defaults.object(forKey: "minimaxProviderAdded.v1") == nil {
+            initialTrackedProviders.insert(.minimax)
+            defaults.set(true, forKey: "minimaxProviderAdded.v1")
+        }
+        if defaults.object(forKey: "qoderProviderAdded.v1") == nil {
+            initialTrackedProviders.insert(.qoder)
+            defaults.set(true, forKey: "qoderProviderAdded.v1")
         }
         trackedProviderIDs = initialTrackedProviders
         // Property observers do not run in an initializer.
@@ -238,6 +252,11 @@ final class AppPreferences {
             hasCompletedInitialSetup = hasLegacyInstallation
         }
 
+        selectedRegion = Self.value(
+            ProviderRegion.self,
+            forKey: Key.selectedRegion,
+            in: defaults
+        ) ?? .defaultSelection
         usageDisplayMode = Self.value(
             UsageDisplayMode.self,
             forKey: Key.usageDisplayMode,
@@ -593,6 +612,7 @@ final class AppPreferences {
         static let seededProvidersRestored = "seededProvidersRestored.v1"
         static let menuBarSelection = "menuBarSelection"
         static let menuBarWindow = "menuBarWindow"
+        static let selectedRegion = "selectedProviderRegion.v1"
         static let usageDisplayMode = "usageDisplayMode"
         static let refreshInterval = "refreshInterval"
     }
@@ -621,11 +641,12 @@ enum ProviderLoginMethod: String, CaseIterable, Identifiable, Sendable {
         case .adobe: [.edge, .chrome]
         case .kimi: [.desktop, .edge, .chrome]
         case .qwen: [.desktop, .edge, .chrome]
+        case .minimax: [.desktop, .edge, .chrome]
+        case .qoder: [.desktop, .edge, .chrome]
         case .cursor: [.desktop, .edge, .chrome]
         case .codex: [.cli, .edge, .chrome]
         case .claude: [.cli, .desktop, .edge, .chrome]
         case .copilot: [.editorFallback, .editor, .cli]
-        default: [.cli]
         }
     }
 }
@@ -674,13 +695,14 @@ extension ProviderLoginMethod {
     func title(for provider: ProviderID) -> String {
         if provider == .copilot {
             switch self {
-            case .editorFallback: return "Auto"
+            case .editorFallback: return "Local OAuth / GitHub CLI"
             case .editor: return "Local OAuth"
             case .cli: return "GitHub CLI OAuth"
             default: break
             }
         }
-        if self == .cli, [.claude, .codex].contains(provider) { return "Local OAuth" }
+        if self == .cli, provider == .codex { return "Desktop app / Local OAuth" }
+        if self == .cli, provider == .claude { return "Local OAuth" }
         return title
     }
 }

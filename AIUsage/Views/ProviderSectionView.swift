@@ -78,21 +78,31 @@ struct ProviderSectionView: View {
                 }
             }
             if let snapshot = state.snapshot, snapshot.hasPanelContent {
-                let ordered = ProviderDetailsLayout.windows(snapshot, expanded: true)
-                let windows: [QuotaWindow] = if !snapshot.quotaSections.isEmpty {
-                    part == .details ? [] : Array(ordered.prefix(2))
-                } else {
-                    part == .summary ? Array(ordered.prefix(2)) : part == .details ? Array(ordered.dropFirst(2)) : ProviderDetailsLayout.windows(snapshot, expanded: showsDetails)
-                }
-                if !windows.isEmpty {
-                    QuotaGrid(windows: windows, displayMode: displayMode)
+                let effectiveDetails = ProviderDetailsLayout.displayedUsageDetails(snapshot)
+                let showsInlineDetails = snapshot.windows.isEmpty && snapshot.quotaSections.isEmpty && !effectiveDetails.isEmpty
+                let summary = ProviderDetailsLayout.summaryWindows(snapshot)
+                let detailGridWindows = ProviderDetailsLayout.detailWindows(snapshot)
+                if part != .details && !summary.isEmpty {
+                    QuotaGrid(windows: summary, displayMode: displayMode)
                         .padding(.horizontal, 6)
                         .padding(.bottom, 4.5)
                 }
+                if showsInlineDetails && part != .details {
+                    VStack(alignment: .leading, spacing: 6) {
+                        usageDetailsRows(effectiveDetails)
+                    }
+                    .padding(.horizontal, 13)
+                    .padding(.bottom, 8)
+                }
                 if part == .details || (part == .all && showsDetails) {
+                    if !detailGridWindows.isEmpty {
+                        QuotaGrid(windows: detailGridWindows, displayMode: displayMode)
+                            .padding(.horizontal, 6)
+                            .padding(.bottom, 4.5)
+                    }
                     ForEach(snapshot.quotaSections) { section in
                         Divider()
-                            .padding(.horizontal, 16)
+                            .padding(.horizontal, 13)
                             .padding(.top, 1.5)
                             .padding(.bottom, 5.5)
                         HStack(spacing: 5) {
@@ -110,34 +120,37 @@ struct ProviderSectionView: View {
                             .padding(.bottom, 4.5)
                     }
                     if !snapshot.consumptionShares.isEmpty {
+                        if !snapshot.windows.isEmpty || !snapshot.quotaSections.isEmpty {
+                            Divider()
+                                .padding(.horizontal, 13)
+                                .padding(.top, 1.5)
+                                .padding(.bottom, 7.5)
+                        }
                         ConsumedUsageBreakdown(shares: snapshot.consumptionShares)
                     }
-                    if (!snapshot.windows.isEmpty || !snapshot.quotaSections.isEmpty || !snapshot.consumptionShares.isEmpty) &&
-                        (snapshot.hasAdditionalUsageSection || (snapshot.resets?.availableCount ?? 0) > 0 || !snapshot.usageDetails.isEmpty) {
-                        Divider()
-                            .padding(.horizontal, 16)
-                            .padding(.top, 1.5)
-                            .padding(.bottom, 7.5)
-                    }
-                    if snapshot.hasAdditionalUsageSection {
-                        AdditionalUsageSection(snapshot: snapshot, displayMode: displayMode)
-                    }
-                    ForEach(snapshot.usageDetails) { detail in
-                        if detail.id.hasSuffix(".credits") {
-                            AdditionalCreditsRow(title: detail.title, value: detail.value)
-                        } else {
-                            HStack(alignment: .firstTextBaseline) {
-                                Text(detail.title).foregroundStyle(.secondary)
-                                Spacer(minLength: 8)
-                                Text(detail.value).monospacedDigit().multilineTextAlignment(.trailing)
-                            }
-                            .font(.caption)
-                            .padding(.horizontal, 13)
-                            .padding(.bottom, 6)
+                    let showsAdditional = ProviderDetailsLayout.showsAdditionalUsageRow(snapshot)
+                    let hasResets = (snapshot.resets?.availableCount ?? 0) > 0
+                    let hasDetails = !showsInlineDetails && !effectiveDetails.isEmpty
+                    if showsAdditional || hasDetails || hasResets {
+                        if !snapshot.windows.isEmpty || !snapshot.quotaSections.isEmpty || !snapshot.consumptionShares.isEmpty {
+                            Divider()
+                                .padding(.horizontal, 13)
+                                .padding(.top, 1.5)
+                                .padding(.bottom, 7.5)
                         }
-                    }
-                    if let resets = snapshot.resets, resets.availableCount > 0 {
-                        ResetsRow(resets: resets)
+                        VStack(alignment: .leading, spacing: 6) {
+                            if hasResets, let resets = snapshot.resets {
+                                ResetsRow(resets: resets)
+                            }
+                            if showsAdditional {
+                                AdditionalUsageSection(snapshot: snapshot, displayMode: displayMode)
+                            }
+                            if hasDetails {
+                                usageDetailsRows(effectiveDetails)
+                            }
+                        }
+                        .padding(.horizontal, 13)
+                        .padding(.bottom, 8)
                     }
                 }
             } else if part != .details, state.isRefreshing {
@@ -164,6 +177,22 @@ struct ProviderSectionView: View {
                     .help(failure.message)
                     .padding(.horizontal, 13)
                     .padding(.bottom, 9)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func usageDetailsRows(_ details: [ProviderUsageDetail]) -> some View {
+        ForEach(details) { detail in
+            if detail.id.hasSuffix(".credits") {
+                AdditionalCreditsRow(detail: detail, displayMode: displayMode)
+            } else {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(detail.title).foregroundStyle(.secondary)
+                    Spacer(minLength: 8)
+                    Text(detail.value).monospacedDigit().multilineTextAlignment(.trailing)
+                }
+                .font(.caption)
             }
         }
     }
@@ -421,6 +450,7 @@ private struct ResetsRow: View {
                     .frame(width: 14, height: 14)
 
                 Text("Resets")
+                    .fontWeight(.medium)
                     .foregroundStyle(.secondary)
 
                 Spacer(minLength: 8)
@@ -444,9 +474,7 @@ private struct ResetsRow: View {
                 .minimumScaleFactor(0.75)
             }
             .font(.caption)
-            .frame(maxWidth: .infinity, minHeight: 22)
-            .padding(.horizontal, 13)
-            .padding(.bottom, 6.5)
+            .frame(maxWidth: .infinity)
             .contentShape(Rectangle())
             .help(presentation.helpText)
             .accessibilityElement(children: .ignore)
@@ -477,49 +505,127 @@ private struct QuotaGrid: View {
     }
 }
 
+private struct BoundedAdditionalBarBlock: View {
+    let label: String
+    let valueText: String
+    let fraction: Double?
+    let resetsAt: Date?
+    let resetFallbackText: String?
+    let resetFallbackIcon: String
+
+    @Environment(\.usagePanelVisible) private var isPanelVisible
+
+    var body: some View {
+        HStack {
+            Text(label).foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Text(valueText).monospacedDigit().lineLimit(1).minimumScaleFactor(0.75)
+        }
+        .padding(.leading, 21)
+
+        if let fraction {
+            let clamped = min(max(fraction, 0), 1)
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(.primary.opacity(0.1))
+                    Capsule().fill(Color(nsColor: .systemOrange)).frame(width: geometry.size.width * clamped)
+                }
+            }
+            .frame(height: 4)
+            .accessibilityHidden(true)
+            .padding(.leading, 21)
+        }
+
+        if let resetsAt {
+            TimelineView(UsageMinuteSchedule(isActive: isPanelVisible)) { context in
+                HStack(spacing: 5) {
+                    Image(systemName: "clock").foregroundStyle(.tertiary)
+                    Text(CompactCountdown.text(until: resetsAt, from: context.date).map { "Reset " + $0 } ?? "Resetting")
+                }
+                .font(.caption2).foregroundStyle(.secondary)
+                .padding(.leading, 21)
+            }
+        } else if let resetFallbackText {
+            HStack(spacing: 5) {
+                Image(systemName: resetFallbackIcon).foregroundStyle(.tertiary)
+                Text(resetFallbackText)
+            }
+            .font(.caption2).foregroundStyle(.secondary)
+            .padding(.leading, 21)
+        }
+    }
+}
+
 private struct AdditionalCreditsRow: View {
-    let title: String
-    let value: String
+    let detail: ProviderUsageDetail
+    let displayMode: UsageDisplayMode
 
     private var segments: [(label: String, number: String)] {
-        value.components(separatedBy: " · ").compactMap { segment in
+        let raw = detail.value.components(separatedBy: " · ")
+        let parsed: [(label: String, number: String)] = raw.compactMap { segment in
             let parts = segment.split(separator: " ", maxSplits: 1).map(String.init)
-            guard parts.count == 2 else { return nil }
+            guard parts.count == 2, parts[1].first?.isNumber == true else { return nil }
             return (label: parts[0], number: parts[1])
         }
+        return parsed.count == raw.count ? parsed : []
     }
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(title)
-                .fontWeight(.medium)
-            Spacer(minLength: 8)
-            if segments.isEmpty {
-                Text(value)
-                    .monospacedDigit()
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 7) {
+                Image(systemName: "plus.circle")
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 14, height: 14)
+
+                Text(detail.title)
                     .fontWeight(.medium)
-            } else {
-                HStack(spacing: 4) {
-                    ForEach(Array(segments.enumerated()), id: \.offset) { index, segment in
-                        if index > 0 {
-                            Text("·")
-                                .foregroundStyle(.tertiary)
-                        }
+                    .foregroundStyle(.secondary)
+
+                Spacer(minLength: 8)
+
+                if detail.boundedProgress == nil {
+                    if segments.isEmpty {
+                        let isMuted = detail.value == "N/A" || detail.value == "Off"
+                        Text(detail.value)
+                            .monospacedDigit()
+                            .fontWeight(isMuted ? .regular : .medium)
+                            .foregroundStyle(isMuted ? .secondary : .primary)
+                    } else {
                         HStack(spacing: 4) {
-                            Text(segment.label)
-                                .foregroundStyle(.secondary)
-                            Text(segment.number)
-                                .monospacedDigit()
-                                .fontWeight(.medium)
+                            ForEach(Array(segments.enumerated()), id: \.offset) { index, segment in
+                                if index > 0 {
+                                    Text("·")
+                                        .foregroundStyle(.tertiary)
+                                }
+                                HStack(spacing: 4) {
+                                    Text(segment.label)
+                                        .foregroundStyle(.secondary)
+                                    Text(segment.number)
+                                        .monospacedDigit()
+                                        .fontWeight(.medium)
+                                }
+                            }
                         }
                     }
                 }
             }
+            .lineLimit(1)
+
+            if let bounded = detail.boundedProgress {
+                BoundedAdditionalBarBlock(
+                    label: bounded.label,
+                    valueText: bounded.valueText(for: displayMode),
+                    fraction: bounded.fraction(for: displayMode),
+                    resetsAt: bounded.resetsAt,
+                    resetFallbackText: bounded.resetNote,
+                    resetFallbackIcon: bounded.resetsAt == nil && bounded.resetNote == "No reset" ? "infinity" : "clock"
+                )
+            }
         }
         .font(.caption)
-        .lineLimit(1)
-        .padding(.horizontal, 13)
-        .padding(.bottom, 6.5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -537,7 +643,16 @@ private struct QuotaTile: View {
                         .font(.caption.weight(.medium))
                         .lineLimit(1)
                     Spacer(minLength: 3)
-                    if window.series.count >= 2 {
+                    if window.isUnlimited {
+                        Text("Unlimited")
+                            .font(.callout.weight(.semibold))
+                            .foregroundStyle(Color(nsColor: .systemIndigo))
+                            .lineLimit(1)
+                    } else if window.isInactive {
+                        Text("—")
+                            .font(.title3.monospacedDigit().weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    } else if window.series.count >= 2 {
                         HStack(alignment: .firstTextBaseline, spacing: 2.5) {
                             ForEach(Array(window.series.enumerated()), id: \.element.id) { index, reading in
                                 if index > 0 {
@@ -572,7 +687,17 @@ private struct QuotaTile: View {
                     ZStack(alignment: .leading) {
                         Capsule()
                             .fill(.primary.opacity(0.1))
-                        if window.series.count >= 2 {
+                        if window.isUnlimited {
+                            Capsule()
+                                .fill(LinearGradient(
+                                    colors: [Color(nsColor: .systemIndigo), Color(nsColor: .systemPurple)],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                ))
+                        } else if window.isInactive {
+                            Capsule()
+                                .fill(Color(nsColor: .tertiaryLabelColor).opacity(0.45))
+                        } else if window.series.count >= 2 {
                             let barLayout = DualQuotaBarLayout.layout(
                                 series: window.series,
                                 displayMode: displayMode
@@ -610,13 +735,17 @@ private struct QuotaTile: View {
                 .frame(height: 4)
                 .accessibilityHidden(true)
 
-                let countText = window.countText(for: displayMode)
-                if window.resetsAt != nil || countText != nil {
+                let countText = window.countText(for: displayMode) ?? window.trailingDetail
+                let subtext = window.isInactive ? window.inactiveDetail : nil
+                if window.resetsAt != nil || countText != nil || subtext != nil {
                     HStack(spacing: 5) {
                         if let reset = window.resetsAt {
                             Image(systemName: "clock")
                                 .foregroundStyle(.tertiary)
                             Text(resetText(reset, relativeTo: context.date))
+                                .foregroundStyle(.secondary)
+                        } else if let subtext {
+                            Text(subtext)
                                 .foregroundStyle(.secondary)
                         }
                         Spacer(minLength: 4)
@@ -670,6 +799,12 @@ private struct QuotaTile: View {
     }
 
     private func accessibilityValue(relativeTo now: Date) -> String {
+        if window.isUnlimited {
+            return "Unlimited"
+        }
+        if window.isInactive {
+            return window.inactiveDetail ?? "Unavailable"
+        }
         let usage: String
         if window.series.count >= 2 {
             usage = window.series.map { reading in
@@ -858,7 +993,7 @@ private struct ConsumedUsageBreakdown: View {
             }
         }
         .font(.caption)
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 13)
         .padding(.bottom, 8)
         .help("Product shares add up to the weekly usage already consumed, not your entire weekly allowance. Shares stay the same in Left and Used modes.")
     }
@@ -870,7 +1005,7 @@ struct AdditionalUsageSection: View {
 
     private var billing: BillingUsage? { snapshot.displayedBillingUsage }
     private var enabled: Bool? { snapshot.additionalUsageEnabled ?? snapshot.xSubscription?.additionalUsageEnabled }
-    private var reset: Date? { snapshot.xSubscription?.additionalUsageResetsAt }
+    private var reset: Date? { snapshot.effectiveAdditionalUsageResetsAt }
     private var fraction: Double? {
         guard case let .boundedSpend(used, limit, _) = billing,
               used.isFinite, limit.isFinite, limit > 0 else { return nil }
@@ -878,14 +1013,34 @@ struct AdditionalUsageSection: View {
         return displayMode == .used ? consumed : 1 - consumed
     }
 
-    @Environment(\.usagePanelVisible) private var isPanelVisible
+    static func spendLabel(for provider: ProviderID) -> String {
+        provider == .muse ? "Top-up" : "Monthly spend"
+    }
+
+    static func resetFallback(for provider: ProviderID) -> (icon: String, text: String) {
+        provider == .muse ? ("infinity", "No reset") : ("clock", "Resets monthly")
+    }
+
+    static func showsHeaderBalance(for snapshot: ProviderSnapshot) -> Bool {
+        guard snapshot.displayedBalance != nil else { return false }
+        return !(snapshot.provider == .muse && snapshot.displayedBillingUsage != nil)
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Additional Usage").fontWeight(.medium)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 7) {
+                Image(systemName: "creditcard")
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 14, height: 14)
+
+                Text("Additional Usage")
+                    .fontWeight(.medium)
+                    .foregroundStyle(.secondary)
+
                 Spacer(minLength: 8)
-                if let balance = snapshot.displayedBalance {
+
+                if Self.showsHeaderBalance(for: snapshot), let balance = snapshot.displayedBalance {
                     HStack(spacing: 4) {
                         Text("Balance").foregroundStyle(.secondary)
                         Text(balance.amount, format: .currency(code: balance.currencyCode))
@@ -895,41 +1050,24 @@ struct AdditionalUsageSection: View {
                 if enabled == false {
                     Text("Off").foregroundStyle(.secondary)
                 } else if billing == nil && snapshot.displayedBalance == nil {
-                    Text("Unavailable").foregroundStyle(.secondary)
+                    Text("N/A").foregroundStyle(.secondary)
                 }
             }
             if let billing, enabled != false {
                 let presentation = BillingUsagePresentation(usage: billing, displayMode: displayMode)
-                HStack {
-                    Text("Monthly spend").foregroundStyle(.secondary)
-                    Spacer(minLength: 8)
-                    Text(presentation.valueText).monospacedDigit().lineLimit(1).minimumScaleFactor(0.75)
-                }
-                if let fraction {
-                    GeometryReader { geometry in
-                        ZStack(alignment: .leading) {
-                            Capsule().fill(.primary.opacity(0.1))
-                            Capsule().fill(Color(nsColor: .systemOrange)).frame(width: geometry.size.width * fraction)
-                        }
-                    }
-                    .frame(height: 4).accessibilityHidden(true)
-                }
-            }
-            if reset != nil && enabled != false {
-                TimelineView(UsageMinuteSchedule(isActive: isPanelVisible)) { context in
-                    HStack {
-                        if let reset {
-                            Image(systemName: "clock").foregroundStyle(.tertiary)
-                            Text(CompactCountdown.text(until: reset, from: context.date).map { "Reset " + $0 } ?? "Resetting")
-                        }
-                    }
-                    .font(.caption2).foregroundStyle(.secondary)
-                }
+                let fallback = Self.resetFallback(for: snapshot.provider)
+                BoundedAdditionalBarBlock(
+                    label: Self.spendLabel(for: snapshot.provider),
+                    valueText: presentation.valueText,
+                    fraction: fraction,
+                    resetsAt: reset,
+                    resetFallbackText: fallback.text,
+                    resetFallbackIcon: fallback.icon
+                )
             }
         }
         .font(.caption)
-        .padding(.horizontal, 16)
-        .padding(.bottom, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
     }
 }
@@ -964,17 +1102,82 @@ enum ProviderDetailsLayout {
         if !pair.isEmpty { result.append(pair) }
         return result
     }
-    static func windows(_ snapshot: ProviderSnapshot, expanded: Bool) -> [QuotaWindow] {
-        let ordered = snapshot.provider == .claude
+    private static func orderedWindows(_ snapshot: ProviderSnapshot) -> [QuotaWindow] {
+        snapshot.provider == .claude
             ? snapshot.windows.filter { [.session, .weekly].contains($0.kind) }
                 + snapshot.windows.filter { $0.kind == .fable }
                 + snapshot.windows.filter { ![.session, .weekly, .fable].contains($0.kind) }
             : snapshot.windows
-        return expanded ? ordered : Array(ordered.prefix(2))
     }
+
+    static func isDetailOnlyWindow(_ window: QuotaWindow, for provider: ProviderID) -> Bool {
+        switch provider {
+        case .claude, .codex, .antigravity, .minimax:
+            ![QuotaKind.session, .weekly].contains(window.kind)
+        case .qwen:
+            ![QuotaKind.daily, .weekly].contains(window.kind)
+        case .adobe:
+            window.kind == .firefly
+        case .copilot:
+            window.kind == .completions
+        case .kimi:
+            window.kind.rawValue.hasPrefix("additional:kimi.code.")
+        default:
+            false
+        }
+    }
+
+    static func summaryWindows(_ snapshot: ProviderSnapshot) -> [QuotaWindow] {
+        let ordered = orderedWindows(snapshot)
+        let primary = ordered.filter { !isDetailOnlyWindow($0, for: snapshot.provider) }
+        return Array((primary.isEmpty ? ordered : primary).prefix(2))
+    }
+
+    static func detailWindows(_ snapshot: ProviderSnapshot) -> [QuotaWindow] {
+        guard snapshot.quotaSections.isEmpty else { return [] }
+        let summaryKinds = Set(summaryWindows(snapshot).map(\.kind))
+        return orderedWindows(snapshot).filter { !summaryKinds.contains($0.kind) }
+    }
+
+    static func windows(_ snapshot: ProviderSnapshot, expanded: Bool) -> [QuotaWindow] {
+        expanded ? (summaryWindows(snapshot) + detailWindows(snapshot)) : summaryWindows(snapshot)
+    }
+
+    static func showsAdditionalUsageRow(_ snapshot: ProviderSnapshot) -> Bool {
+        if snapshot.hasAdditionalUsageSection { return true }
+        guard !snapshot.windows.isEmpty || !snapshot.quotaSections.isEmpty else { return false }
+        return [.claude, .cursor, .muse].contains(snapshot.provider)
+    }
+
+    static func displayedUsageDetails(_ snapshot: ProviderSnapshot) -> [ProviderUsageDetail] {
+        guard snapshot.provider == .codex,
+              !snapshot.usageDetails.contains(where: { $0.id == "codex.flex.credits" }) else {
+            return snapshot.usageDetails
+        }
+        let flexDetail: ProviderUsageDetail?
+        if case let .flexCreditBalance(remaining, _) = snapshot.billingUsage {
+            flexDetail = ProviderUsageDetail(
+                id: "codex.flex.credits",
+                title: "Additional Credits",
+                value: "Flex \(remaining.formatted(.number))"
+            )
+        } else if !snapshot.windows.isEmpty {
+            flexDetail = ProviderUsageDetail(
+                id: "codex.flex.credits",
+                title: "Additional Credits",
+                value: snapshot.additionalUsageEnabled == false ? "Off" : "N/A"
+            )
+        } else {
+            flexDetail = nil
+        }
+        return flexDetail.map { [$0] + snapshot.usageDetails } ?? snapshot.usageDetails
+    }
+
     static func canExpand(_ snapshot: ProviderSnapshot) -> Bool {
-        snapshot.windows.count > 2 || !snapshot.quotaSections.isEmpty || !snapshot.consumptionShares.isEmpty || snapshot.hasAdditionalUsageSection ||
-            (snapshot.resets?.availableCount ?? 0) > 0 || !snapshot.usageDetails.isEmpty
+        let details = displayedUsageDetails(snapshot)
+        let hasInlineOnlyDetails = snapshot.windows.isEmpty && snapshot.quotaSections.isEmpty && !details.isEmpty
+        return !detailWindows(snapshot).isEmpty || !snapshot.quotaSections.isEmpty || !snapshot.consumptionShares.isEmpty || showsAdditionalUsageRow(snapshot) ||
+            (snapshot.resets?.availableCount ?? 0) > 0 || (!hasInlineOnlyDetails && !details.isEmpty)
     }
 }
 

@@ -12,11 +12,14 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
     case muse
     case qwen
     case adobe
+    case minimax
+    case qoder
 
     // Keep enum cases for decoding saved preferences; only these providers run/show.
     static let enabledCases: [Self] = [
         .claude, .codex, .cursor, .antigravity, .copilot,
-        .gemini, .manus, .kimi, .muse, .qwen, .adobe
+        .gemini, .manus, .kimi, .muse, .qwen, .adobe,
+        .minimax, .qoder
     ]
 
     var isEnabledInBuild: Bool { Self.enabledCases.contains(self) }
@@ -35,6 +38,8 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .gemini: "Gemini"
         case .qwen: "Qwen"
         case .adobe: "Adobe"
+        case .minimax: "MiniMax"
+        case .qoder: "Qoder"
         }
     }
 
@@ -51,6 +56,17 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .gemini: "ProviderGemini"
         case .qwen: "ProviderQwen"
         case .adobe: "ProviderAdobe"
+        case .minimax: "ProviderMiniMax"
+        case .qoder: "ProviderQoder"
+        }
+    }
+
+    var region: ProviderRegion {
+        switch self {
+        case .claude, .codex, .cursor, .antigravity, .copilot, .gemini, .muse, .adobe:
+            .us
+        case .manus, .kimi, .qwen, .minimax, .qoder:
+            .cn
         }
     }
 
@@ -72,7 +88,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .cursor: ["cursor"]
         case .antigravity: ["antigravity", "agy"]
         case .copilot: ["copilot", "github-copilot"]
-        case .gemini, .manus, .kimi, .muse, .qwen, .adobe: []
+        case .gemini, .manus, .kimi, .muse, .qwen, .adobe, .minimax, .qoder: []
         }
     }
 
@@ -147,6 +163,28 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
                 "~/Library/Application Support/Microsoft Edge/Default/Cookies",
                 "~/Library/Application Support/Google/Chrome/Default/Cookies"
             ]
+        case .minimax:
+            [
+                "/Applications/MiniMax Code.app",
+                "~/Applications/MiniMax Code.app",
+                "/Applications/MiniMax Design.app",
+                "~/Applications/MiniMax Design.app",
+                "~/.minimax/auth/prod/en/mcode-public/auth.json",
+                "~/Library/Application Support/@hilo/MiniMax Hub Global/hub-config-global.json",
+                "~/Library/Application Support/Microsoft Edge/Default/Cookies",
+                "~/Library/Application Support/Google/Chrome/Default/Cookies"
+            ]
+        case .qoder:
+            [
+                "/Applications/Qoder.app",
+                "~/Applications/Qoder.app",
+                "/Applications/Qoder IDE.app",
+                "~/Applications/Qoder IDE.app",
+                "~/Library/Application Support/com.qoder.app.stable/auth.v1.dat",
+                "~/Library/Application Support/Qoder/User/globalStorage/state.vscdb",
+                "~/Library/Application Support/Microsoft Edge/Default/Cookies",
+                "~/Library/Application Support/Google/Chrome/Default/Cookies"
+            ]
         }
     }
 
@@ -156,7 +194,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .kimi, .adobe: .monthly
         case .cursor: .totalUsage
         case .copilot: .credits
-        case .claude, .codex, .antigravity, .gemini, .muse, .qwen: .weekly
+        case .claude, .codex, .antigravity, .gemini, .muse, .qwen, .minimax, .qoder: .weekly
         }
     }
 }
@@ -264,8 +302,8 @@ enum QuotaKind: RawRepresentable, Codable, Hashable, Sendable {
         case .autoUsage: "Auto Usage"
         case .apiUsage: "API Usage"
         case .credits: "Credits"
-        case .chat: "Chat Monthly"
-        case .completions: "Completions Monthly"
+        case .chat: "Monthly"
+        case .completions: "Completions"
         case .claudePool: "3rd-party"
         case .claudePoolWeekly: "3rd-party Weekly"
         case .argonWeekly: "Argon Weekly"
@@ -411,8 +449,8 @@ enum MenuBarMetricID: RawRepresentable, CaseIterable, Codable, Hashable, Identif
         case .totalUsage: "Total Usage"
         case .autoUsage: "Auto Usage"
         case .apiUsage: "API Usage"
-        case .chat: "Chat Monthly"
-        case .completions: "Completions Monthly"
+        case .chat: "Monthly"
+        case .completions: "Completions"
         case .claudePool: "3rd-party"
         case .claudePoolWeekly: "3rd-party Weekly"
         case .argonWeekly: "Argon Weekly"
@@ -553,6 +591,10 @@ struct QuotaWindow: Identifiable, Equatable, Sendable {
     let remainingCount: Double?
     let limitCount: Double?
     let series: [QuotaSeriesReading]
+    let isInactive: Bool
+    let inactiveDetail: String?
+    let isUnlimited: Bool
+    let trailingDetail: String?
 
     init(
         kind: QuotaKind,
@@ -560,12 +602,20 @@ struct QuotaWindow: Identifiable, Equatable, Sendable {
         resetsAt: Date?,
         remainingCount: Double? = nil,
         limitCount: Double? = nil,
-        series: [QuotaSeriesReading] = []
+        series: [QuotaSeriesReading] = [],
+        isInactive: Bool = false,
+        inactiveDetail: String? = nil,
+        isUnlimited: Bool = false,
+        trailingDetail: String? = nil
     ) {
         self.kind = kind
         self.usedPercent = usedPercent
         self.resetsAt = resetsAt
         self.series = series
+        self.isInactive = isInactive
+        self.inactiveDetail = inactiveDetail
+        self.isUnlimited = isUnlimited
+        self.trailingDetail = trailingDetail
         if let remaining = remainingCount, let limit = limitCount,
            remaining.isFinite, limit.isFinite, limit > 0, remaining >= 0 {
             self.remainingCount = min(remaining, limit)
@@ -577,6 +627,7 @@ struct QuotaWindow: Identifiable, Equatable, Sendable {
     }
 
     var id: QuotaKind { kind }
+    var isBoundedActive: Bool { !isInactive && !isUnlimited }
     var renderedFraction: Double { min(max(usedPercent / 100, 0), 1) }
 
     func countText(for displayMode: UsageDisplayMode) -> String? {
@@ -585,7 +636,7 @@ struct QuotaWindow: Identifiable, Equatable, Sendable {
         return "\(Self.formatCount(shown)) / \(Self.formatCount(limitCount))"
     }
 
-    private static func formatCount(_ value: Double) -> String {
+    static func formatCount(_ value: Double) -> String {
         let rounded = (value * 100).rounded() / 100
         if rounded.rounded() == rounded {
             return Int(rounded).formatted(.number)
@@ -712,10 +763,58 @@ struct MonetaryBalance: Equatable, Sendable {
     let currencyCode: String
 }
 
+struct BoundedCreditProgress: Equatable, Sendable {
+    let label: String
+    let used: Double
+    let limit: Double
+    let resetsAt: Date?
+    let resetNote: String?
+
+    init(
+        label: String,
+        used: Double,
+        limit: Double,
+        resetsAt: Date? = nil,
+        resetNote: String? = "No reset"
+    ) {
+        self.label = label
+        let clampedLimit = limit.isFinite && limit > 0 ? limit : 0
+        self.limit = clampedLimit
+        self.used = used.isFinite ? min(max(used, 0), clampedLimit) : 0
+        self.resetsAt = resetsAt
+        self.resetNote = resetNote
+    }
+
+    func fraction(for displayMode: UsageDisplayMode) -> Double? {
+        guard limit > 0 else { return nil }
+        let consumed = min(max(used / limit, 0), 1)
+        return displayMode == .used ? consumed : 1 - consumed
+    }
+
+    func valueText(for displayMode: UsageDisplayMode) -> String {
+        let shown = displayMode == .used ? used : max(limit - used, 0)
+        let suffix = displayMode == .used ? "used" : "left"
+        return "\(QuotaWindow.formatCount(shown)) / \(QuotaWindow.formatCount(limit)) \(suffix)"
+    }
+}
+
 struct ProviderUsageDetail: Equatable, Sendable, Identifiable {
     let id: String
     let title: String
     let value: String
+    let boundedProgress: BoundedCreditProgress?
+
+    init(
+        id: String,
+        title: String,
+        value: String,
+        boundedProgress: BoundedCreditProgress? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.value = value
+        self.boundedProgress = boundedProgress
+    }
 }
 
 struct ProviderQuotaSection: Equatable, Sendable, Identifiable {
@@ -747,6 +846,8 @@ struct ProviderSnapshot: Equatable, Sendable {
         case .muse: return "Product usage limits • Personal Agent & Top-up"
         case .qwen: return "Shared account limits • Chat, Agent & Qwen Code"
         case .adobe: return "Generative credits • Firefly, Photoshop & Creative Cloud"
+        case .minimax: return "Unified account • Agent, Design & Hailuo Video"
+        case .qoder: return "Shared account limits • Qoder & Qoder IDE"
         }
     }
 
@@ -757,6 +858,7 @@ struct ProviderSnapshot: Equatable, Sendable {
     let usageDetails: [ProviderUsageDetail]
     let prepaidBalance: MonetaryBalance?
     let additionalUsageEnabled: Bool?
+    let additionalUsageResetsAt: Date?
     let usageBreakdown: ConsumptionBreakdown?
     let quotaSections: [ProviderQuotaSection]
 
@@ -774,6 +876,8 @@ struct ProviderSnapshot: Equatable, Sendable {
         else if provider == .manus { prefix = "manus-session:" }
         else if provider == .kimi { prefix = "kimi-session:" }
         else if provider == .qwen { prefix = "qwen-session:" }
+        else if provider == .minimax { prefix = "minimax-session:" }
+        else if provider == .qoder { prefix = "qoder-session:" }
         else { return nil }
         guard label.hasPrefix(prefix), label.dropFirst(prefix.count).count == 64,
               label.dropFirst(prefix.count).allSatisfy({ $0.isHexDigit }) else { return nil }
@@ -796,6 +900,9 @@ struct ProviderSnapshot: Equatable, Sendable {
     var displayedBalance: MonetaryBalance? {
         prepaidBalance ?? xSubscription?.prepaidDollars.map { MonetaryBalance(amount: $0, currencyCode: "USD") }
     }
+    var effectiveAdditionalUsageResetsAt: Date? {
+        additionalUsageResetsAt ?? xSubscription?.additionalUsageResetsAt
+    }
     var hasAdditionalUsageSection: Bool {
         guard (additionalUsageEnabled ?? xSubscription?.additionalUsageEnabled) != false else { return false }
         if let balance = displayedBalance, balance.amount.isFinite, balance.amount > 0 { return true }
@@ -804,6 +911,10 @@ struct ProviderSnapshot: Equatable, Sendable {
         case let .unboundedSpend(used, _): return used > 0
         default: return false
         }
+    }
+    var hasFlexCreditBalance: Bool {
+        if case .flexCreditBalance = billingUsage { return true }
+        return false
     }
 
     init(
@@ -821,6 +932,7 @@ struct ProviderSnapshot: Equatable, Sendable {
         usageDetails: [ProviderUsageDetail] = [],
         prepaidBalance: MonetaryBalance? = nil,
         additionalUsageEnabled: Bool? = nil,
+        additionalUsageResetsAt: Date? = nil,
         usageBreakdown: ConsumptionBreakdown? = nil,
         quotaSections: [ProviderQuotaSection] = []
     ) {
@@ -838,6 +950,7 @@ struct ProviderSnapshot: Equatable, Sendable {
         self.usageDetails = usageDetails
         self.prepaidBalance = prepaidBalance
         self.additionalUsageEnabled = additionalUsageEnabled
+        self.additionalUsageResetsAt = additionalUsageResetsAt
         self.usageBreakdown = usageBreakdown
         self.quotaSections = quotaSections
     }
@@ -849,6 +962,7 @@ struct ProviderSnapshot: Equatable, Sendable {
             !consumptionShares.isEmpty ||
             !usageDetails.isEmpty ||
             hasAdditionalUsageSection ||
+            hasFlexCreditBalance ||
             (resets?.availableCount ?? 0) > 0
     }
 
@@ -868,7 +982,7 @@ struct ProviderSnapshot: Equatable, Sendable {
     }
 
     var availableMenuBarItems: [MenuBarItemID] {
-        var items = windows.map {
+        var items = windows.filter(\.isBoundedActive).map {
             MenuBarItemID(provider: provider, metric: $0.kind.menuBarMetric)
         }
         if xSubscription != nil {
@@ -891,7 +1005,7 @@ struct ProviderSnapshot: Equatable, Sendable {
         for metric: MenuBarMetricID,
         displayMode: UsageDisplayMode
     ) -> MenuBarReadingValue? {
-        if let window = window(for: metric) {
+        if let window = window(for: metric), window.isBoundedActive {
             return .percentage(
                 displayMode.displayedPercent(from: window.usedPercent)
             )
@@ -906,9 +1020,9 @@ struct ProviderSnapshot: Equatable, Sendable {
     func primaryWindow(for selection: MenuBarWindow) -> QuotaWindow? {
         switch selection {
         case .session:
-            windows.first { $0.kind == .session }
+            windows.first { $0.kind == .session && $0.isBoundedActive }
         case .weekly:
-            windows.first { $0.kind == .weekly }
+            windows.first { $0.kind == .weekly && $0.isBoundedActive }
         }
     }
 
@@ -1006,6 +1120,33 @@ enum MenuBarWindow: String, CaseIterable, Identifiable, Sendable {
         case .session: "Session"
         case .weekly: "Weekly"
         }
+    }
+}
+
+enum ProviderRegion: String, CaseIterable, Identifiable, Sendable {
+    case us
+    case cn
+
+    static let defaultSelection: Self = .us
+
+    var id: Self { self }
+
+    var flag: String {
+        switch self {
+        case .us: "🇺🇸"
+        case .cn: "🇨🇳"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .us: "US"
+        case .cn: "CN"
+        }
+    }
+
+    var badgeTitle: String {
+        "\(flag) \(title)"
     }
 }
 

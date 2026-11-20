@@ -79,7 +79,7 @@ final class UsageHistory {
         guard let email = snapshot.historyIdentity else { return }
         let date = Date(timeIntervalSince1970: floor(snapshot.fetchedAt.timeIntervalSince1970 / 3600) * 3600)
         let account = "\(snapshot.credentialSource ?? "selected")|\(email)"
-        for window in snapshot.windows where window.usedPercent.isFinite {
+        for window in snapshot.windows where window.isBoundedActive && window.usedPercent.isFinite {
             observe(provider: snapshot.provider, account: account, date: snapshot.fetchedAt, window: window)
             let point = UsageHistoryPoint(provider: snapshot.provider, account: account, date: date,
                                           metric: window.kind, usedPercent: window.usedPercent, reset: window.resetsAt)

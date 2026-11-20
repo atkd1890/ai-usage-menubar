@@ -80,6 +80,7 @@ final class UsageStore {
         return [CredentialSelectingProvider(local: ClaudeProvider(identity: AccountIdentityClient())), CredentialSelectingProvider(local: CodexProvider()),
                 CredentialSelectingProvider(local: CursorProvider(identity: AccountIdentityClient())),
                 ConsumerQuotaProvider(id: .manus), ConsumerQuotaProvider(id: .kimi), MuseProvider(), QwenProvider(), AdobeProvider(),
+                MiniMaxProvider(), QoderProvider(),
                 AntigravityDesktopProvider(), CopilotProvider(method: { .selected(for: .copilot) }, identity: AccountIdentityClient()),
                 GeminiProvider(native: GeminiNativeProvider(session: google), identity: AccountIdentityClient())]
     }

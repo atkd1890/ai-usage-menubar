@@ -42,7 +42,9 @@ struct WebSessionStore: Sendable {
             "muse.ai": ["hatch_sess", "hatch_gw"],
             "qwen.ai": ["refresh_token"],
             "kimi.ai": ["kimi-auth"],
-            "services.adobe.com": ["ims_sid"]]
+            "services.adobe.com": ["ims_sid"],
+            "qoder.com": ["qoder_session_cookie"],
+            "design.minimax.io": ["_token"]]
         guard !names.isEmpty, Set(names).isSubset(of: allowed[domain] ?? []),
               source != .claudeDesktop || domain == "claude.ai",
               source != .codexDesktop || domain == "chatgpt.com",
@@ -53,7 +55,7 @@ struct WebSessionStore: Sendable {
         guard let path = [base + "Cookies", base + "Network/Cookies"].first(where: files.exists) else {
             throw ProviderFailure(.authentication, "No session found in the selected app or browser.")
         }
-        let selectedAccess = ["manus.im", "muse.ai", "qwen.ai", "kimi.ai", "services.adobe.com"].contains(domain) && (source == .edge || source == .chrome) ? BrowserDatabaseAccess.start(path: path) : nil
+        let selectedAccess = ["manus.im", "muse.ai", "qwen.ai", "kimi.ai", "services.adobe.com", "qoder.com", "design.minimax.io"].contains(domain) && (source == .edge || source == .chrome) ? BrowserDatabaseAccess.start(path: path) : nil
         defer { selectedAccess?.stopAccessingSecurityScopedResource() }
         let hosts: Set<String>
         switch domain {
@@ -63,6 +65,10 @@ struct WebSessionStore: Sendable {
             hosts = ["kimi.ai", ".kimi.ai", "www.kimi.ai", ".www.kimi.ai"]
         case "services.adobe.com":
             hosts = ["services.adobe.com", ".services.adobe.com", "adobe.com", ".adobe.com"]
+        case "qoder.com":
+            hosts = ["qoder.com", ".qoder.com"]
+        case "design.minimax.io":
+            hosts = ["design.minimax.io", ".design.minimax.io", "minimax.io", ".minimax.io", "agent.minimax.io", ".agent.minimax.io"]
         default:
             hosts = [domain, "." + domain]
         }
