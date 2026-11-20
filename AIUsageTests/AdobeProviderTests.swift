@@ -233,4 +233,26 @@ final class AdobeProviderTests: XCTestCase {
         )
         XCTAssertEqual(AdobeProvider.extractAccessToken(from: response), "meta-token")
     }
+
+    func testMissingFireflyPlanRendersInactiveFireflyGraySlot() throws {
+        let json = """
+        {
+          "total": {
+            "quota": {"total": 25, "used": 5, "available": 20},
+            "availableUntil": "2026-12-01T00:00:00Z"
+          }
+        }
+        """
+        let snapshot = try AdobeProvider.map(
+            data: Data(json.utf8),
+            accessToken: sampleJWT,
+            credentialSource: "Edge Default",
+            now: Date()
+        )
+        XCTAssertEqual(snapshot.windows.map(\.kind), [.monthly, .firefly])
+        XCTAssertFalse(snapshot.windows[0].isInactive)
+        XCTAssertTrue(snapshot.windows[1].isInactive)
+        XCTAssertEqual(snapshot.windows[1].inactiveDetail, "No Firefly plan")
+        XCTAssertEqual(snapshot.availableMenuBarItems.map(\.metric), [.monthly])
+    }
 }

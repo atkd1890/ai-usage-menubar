@@ -78,13 +78,15 @@ enum CopilotUsageMapper {
             )
         }
 
+        let overagePermitted = ProviderParsing.object(snapshots?["premium_interactions"])?["overage_permitted"] as? Bool
         return ProviderSnapshot(
             provider: .copilot,
             planName: planName(body["copilot_plan"], accessTypeSKU: body["access_type_sku"]),
             windows: windows,
             fetchedAt: now,
             usageScope: "Account usage · quotas and credits shown separately",
-            usageDetails: quotaAllowanceDetails(body) + notices
+            usageDetails: quotaAllowanceDetails(body) + notices,
+            additionalUsageEnabled: overagePermitted
         )
     }
 
@@ -137,10 +139,21 @@ enum CopilotUsageMapper {
         let entitlement = ProviderParsing.double(bucket["entitlement"])
         let remaining = ProviderParsing.double(bucket["remaining"]) ?? ProviderParsing.double(bucket["quota_remaining"])
 
-        if bucket["unlimited"] as? Bool == true ||
+        let isUnlimited = bucket["unlimited"] as? Bool == true ||
             entitlement == -1 ||
-            remaining == -1 ||
-            entitlement == 0 {
+            remaining == -1
+        if isUnlimited {
+            if [QuotaKind.chat, .completions].contains(kind) {
+                return QuotaWindow(
+                    kind: kind,
+                    usedPercent: 0,
+                    resetsAt: nil,
+                    isUnlimited: true
+                )
+            }
+            return nil
+        }
+        if entitlement == 0 {
             return nil
         }
 

@@ -80,6 +80,17 @@ enum CodexUsageMapper {
             windows += discoveredWindows(review, id: "codex.review", title: "Code Review", now: now, notices: &details)
         }
 
+        let creditsObject = ProviderParsing.object(body["credits"])
+        let hasCredits = (creditsObject?["has_credits"] as? Bool)
+            ?? boolean(response.header("x-codex-credits-has-credits"))
+        if hasCredits != false && creditsObject?["unlimited"] as? Bool == true {
+            details.append(ProviderUsageDetail(
+                id: "codex.flex.credits",
+                title: "Additional Credits",
+                value: "Unlimited"
+            ))
+        }
+
         return ProviderSnapshot(
             provider: .codex,
             planName: planName(body["plan_type"]),
@@ -94,7 +105,8 @@ enum CodexUsageMapper {
             fetchedAt: now,
             accountEmail: AccountEmail.validated(body["email"]),
             usageScope: "Shared allowance · Codex & ChatGPT Work",
-            usageDetails: details
+            usageDetails: details,
+            additionalUsageEnabled: hasCredits
         )
     }
 

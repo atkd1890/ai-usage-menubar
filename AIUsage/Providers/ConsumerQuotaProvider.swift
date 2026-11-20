@@ -280,14 +280,21 @@ actor ConsumerQuotaProvider: UsageProvider {
         if let total = number(data["totalCredits"]), total > 0 {
             creditParts.append("Total \(Int(total.rounded()).formatted(.number))")
         }
-        if !creditParts.isEmpty {
-            details.append(ProviderUsageDetail(
-                id: "manus.credits",
-                title: "Additional Credits",
-                value: creditParts.joined(separator: " · ")
+        details.append(ProviderUsageDetail(
+            id: "manus.credits",
+            title: "Additional Credits",
+            value: creditParts.isEmpty ? "N/A" : creditParts.joined(separator: " · ")
+        ))
+        guard !windows.isEmpty else { throw ProviderFailure(.invalidResponse, "Manus returned no bounded quota.") }
+        if !windows.contains(where: { $0.kind == .additional(id: "manus.monthly", title: "Monthly") }) {
+            windows.append(QuotaWindow(
+                kind: .additional(id: "manus.monthly", title: "Monthly"),
+                usedPercent: 0,
+                resetsAt: nil,
+                isInactive: true,
+                inactiveDetail: "No Pro plan"
             ))
         }
-        guard !windows.isEmpty else { throw ProviderFailure(.invalidResponse, "Manus returned no bounded quota.") }
         return ProviderSnapshot(provider: .manus, planName: nil, windows: windows,
             fetchedAt: Date(), credentialSource: credentialSource, accountLabel: accountLabel,
             usageScope: "Account allowance • Manus", usageDetails: details)
@@ -365,6 +372,15 @@ actor ConsumerQuotaProvider: UsageProvider {
             } else { notices.append(QuotaDiscovery.notice("Kimi Code")) }
         }
         guard !windows.isEmpty else { throw ProviderFailure(.invalidResponse, "Kimi returned no bounded usage.") }
+        if !windows.contains(where: { $0.kind.rawValue.hasPrefix("additional:kimi.code.") }) {
+            windows.append(QuotaWindow(
+                kind: .additional(id: "kimi.code.7d", title: "Kimi Code · Weekly"),
+                usedPercent: 0,
+                resetsAt: nil,
+                isInactive: true,
+                inactiveDetail: "No Kimi Code plan"
+            ))
+        }
         let sub = account["subscription"] as? [String: Any]
         let goods = sub?["goods"] as? [String: Any]
         return ProviderSnapshot(provider: .kimi, planName: goods?["title"] as? String, windows: windows,

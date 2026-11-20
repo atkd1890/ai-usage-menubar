@@ -842,11 +842,30 @@ actor QwenProvider: UsageProvider {
             limitCount: weeklyTotal
         )
 
-        var windows: [QuotaWindow] = []
-        if let dailyWindow { windows.append(dailyWindow) }
-        windows.append(weeklyWindow)
-        if let videoCreditsWindow { windows.append(videoCreditsWindow) }
-        if let imageGenerationWindow { windows.append(imageGenerationWindow) }
+        var windows: [QuotaWindow] = [
+            dailyWindow ?? QuotaWindow(
+                kind: .daily,
+                usedPercent: 0,
+                resetsAt: nil,
+                isInactive: true,
+                inactiveDetail: "Not on plan"
+            ),
+            weeklyWindow,
+            videoCreditsWindow ?? QuotaWindow(
+                kind: .additional(id: "qwen.daily_credits", title: "Video Credits"),
+                usedPercent: 0,
+                resetsAt: nil,
+                isInactive: true,
+                inactiveDetail: "Not on plan"
+            ),
+            imageGenerationWindow ?? QuotaWindow(
+                kind: .additional(id: "qwen.image_generation", title: "Image Generation"),
+                usedPercent: 0,
+                resetsAt: nil,
+                isInactive: true,
+                inactiveDetail: "Not on plan"
+            )
+        ]
         windows.append(contentsOf: otherWindows)
 
         var resets: UsageResets?

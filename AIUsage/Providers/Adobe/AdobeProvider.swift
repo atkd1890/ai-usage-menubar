@@ -201,6 +201,24 @@ actor AdobeProvider: UsageProvider {
         guard !windows.isEmpty else {
             throw ProviderFailure(.invalidResponse, "No Adobe generative quota found in balance response.")
         }
+        if !windows.contains(where: { $0.kind == .monthly }) {
+            windows.insert(QuotaWindow(
+                kind: .monthly,
+                usedPercent: 0,
+                resetsAt: nil,
+                isInactive: true,
+                inactiveDetail: "No plan"
+            ), at: 0)
+        }
+        if !windows.contains(where: { $0.kind == .firefly }) {
+            windows.append(QuotaWindow(
+                kind: .firefly,
+                usedPercent: 0,
+                resetsAt: nil,
+                isInactive: true,
+                inactiveDetail: "No Firefly plan"
+            ))
+        }
 
         let email = AccountEmail.jwt(accessToken)
 

@@ -71,7 +71,8 @@ enum CursorUsageMapper {
             billingUsage: onDemandUsage(
                 ProviderParsing.object(body["spendLimitUsage"])
             ),
-            fetchedAt: now
+            fetchedAt: now,
+            additionalUsageResetsAt: reset
         )
     }
 

@@ -423,4 +423,26 @@ final class QwenTests: XCTestCase {
         XCTAssertEqual(sessionStore.load(for: "Edge Default")?.refreshToken, "recovered-refresh-2")
         XCTAssertEqual(sessionStore.load(for: "Edge Default")?.isForked, false)
     }
+
+    func testMissingEntitlementsRenderInactiveGraySlotsAndStayOutOfMenuBar() throws {
+        let snapshot = try QwenProvider.map(
+            agentUsage: agentUsageOK,
+            credits: nil,
+            resetCards: nil,
+            memberLevel: httpResponse(json: #"{"success":true,"data":{"memberType":"free"}}"#),
+            now: now
+        )
+        XCTAssertEqual(snapshot.windows.map(\.kind), [
+            .daily,
+            .weekly,
+            .additional(id: "qwen.daily_credits", title: "Video Credits"),
+            .additional(id: "qwen.image_generation", title: "Image Generation")
+        ])
+        XCTAssertTrue(snapshot.windows[0].isInactive)
+        XCTAssertFalse(snapshot.windows[1].isInactive)
+        XCTAssertTrue(snapshot.windows[2].isInactive)
+        XCTAssertTrue(snapshot.windows[3].isInactive)
+        XCTAssertEqual(snapshot.windows[0].inactiveDetail, "Not on plan")
+        XCTAssertEqual(snapshot.availableMenuBarItems.map(\.metric), [.weekly])
+    }
 }

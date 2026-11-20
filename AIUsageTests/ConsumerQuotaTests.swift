@@ -189,11 +189,16 @@ final class ConsumerQuotaTests: XCTestCase {
     }
     func testManusDailyDoesNotCombineFreeCreditsOrInventPlan() throws {
         let value = try ConsumerQuotaProvider.manus(httpResponse(json: #"{"totalCredits":1300,"freeCredits":1000,"refreshCredits":150,"maxRefreshCredits":300,"nextRefreshTime":"2026-11-14T00:00:00Z"}"#))
+        XCTAssertEqual(value.windows.count, 2)
         XCTAssertEqual(value.windows.first?.kind, .daily)
         XCTAssertEqual(value.windows.first?.usedPercent, 50)
         XCTAssertEqual(value.windows.first?.remainingCount, 150)
         XCTAssertEqual(value.windows.first?.limitCount, 300)
         XCTAssertNotNil(value.windows.first?.resetsAt)
+        XCTAssertEqual(value.windows[1].kind, .additional(id: "manus.monthly", title: "Monthly"))
+        XCTAssertTrue(value.windows[1].isInactive)
+        XCTAssertEqual(value.windows[1].inactiveDetail, "No Pro plan")
+        XCTAssertEqual(value.availableMenuBarItems.map(\.metric), [.daily])
         XCTAssertNil(value.planName)
         XCTAssertNil(value.billingUsage)
         XCTAssertEqual(value.usageDetails, [
@@ -293,9 +298,14 @@ final class ConsumerQuotaTests: XCTestCase {
         let value = try ConsumerQuotaProvider.kimi(subscription: subscription,
             stats: httpResponse(json: #"{"subscriptionBalance":{"feature":"FEATURE_OMNI","amountUsedRatio":0,"expireTime":"2026-12-01T00:00:00Z"}}"#))
         XCTAssertEqual(value.planName, "Free")
+        XCTAssertEqual(value.windows.count, 2)
         XCTAssertEqual(value.windows.first?.kind, .monthly)
         XCTAssertEqual(value.windows.first?.kind.title, "Monthly")
         XCTAssertEqual(value.windows.first?.usedPercent, 0)
+        XCTAssertEqual(value.windows[1].kind, .additional(id: "kimi.code.7d", title: "Kimi Code · Weekly"))
+        XCTAssertTrue(value.windows[1].isInactive)
+        XCTAssertEqual(value.windows[1].inactiveDetail, "No Kimi Code plan")
+        XCTAssertEqual(value.availableMenuBarItems.map(\.metric), [.monthly])
         let coding = try ConsumerQuotaProvider.kimi(subscription: subscription,
             stats: httpResponse(json: #"{"subscriptionBalance":{"feature":"FEATURE_CODING","amountUsedRatio":0}}"#))
         XCTAssertEqual(coding.windows.first?.kind.rawValue, "additional:kimi.membership.FEATURE_CODING")
@@ -305,6 +315,7 @@ final class ConsumerQuotaTests: XCTestCase {
         )
         XCTAssertEqual(fallbackAndWeekly.windows.map(\.kind.rawValue), ["monthly", "additional:kimi.code.7d"])
         XCTAssertEqual(fallbackAndWeekly.windows.map(\.usedPercent), [25, 40])
+        XCTAssertTrue(fallbackAndWeekly.windows.allSatisfy { !$0.isInactive })
         for invalid in ["true", "-1", "1.1", "null"] {
             XCTAssertThrowsError(try ConsumerQuotaProvider.kimi(subscription: subscription,
                 stats: httpResponse(json: "{\"subscriptionBalance\":{\"feature\":\"FEATURE_OMNI\",\"amountUsedRatio\":\(invalid)}}")))
