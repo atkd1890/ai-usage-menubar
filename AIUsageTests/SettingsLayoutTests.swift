@@ -15,7 +15,7 @@ import XCTest
         let size = host.sizeThatFits(in: NSSize(width: 750, height: CGFloat.greatestFiniteMagnitude))
         XCTAssertEqual(size.width, 750, accuracy: 1)
         XCTAssertGreaterThan(size.height, 400)
-        XCTAssertLessThan(size.height, 1300)
+        XCTAssertLessThan(size.height, 1500)
         let window = NSWindow(contentRect: NSRect(x: -10000, y: 0, width: size.width, height: size.height), styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.appearance = NSAppearance(named: .darkAqua)
@@ -25,6 +25,16 @@ import XCTest
         defer { window.close() }
         try await Task.sleep(for: .milliseconds(120))
         host.view.layoutSubtreeIfNeeded()
+        func allDescendants(of view: NSView) -> [NSView] {
+            view.subviews + view.subviews.flatMap(allDescendants(of:))
+        }
+        let loginPopUps = allDescendants(of: host.view).compactMap { $0 as? NSPopUpButton }.filter {
+            $0.accessibilityLabel()?.hasPrefix("Login method for ") == true
+        }
+        XCTAssertEqual(loginPopUps.count, ProviderID.enabledCases.count)
+        for button in loginPopUps {
+            XCTAssertEqual(button.frame.width, 184, accuracy: 0.5)
+        }
         let bitmap = try XCTUnwrap(host.view.bitmapImageRepForCachingDisplay(in: host.view.bounds))
         host.view.cacheDisplay(in: host.view.bounds, to: bitmap)
         try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: "/tmp/aiusage-settings-alerts-fixture.png"))

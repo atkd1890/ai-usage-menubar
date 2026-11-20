@@ -8,6 +8,7 @@ struct DashboardView: View {
     @Environment(\.usagePanelVisible) private var isPanelVisible
     @Bindable var launchAtLogin: LaunchAtLoginController
     @Binding var usageDisplayMode: UsageDisplayMode
+    @Binding var selectedRegion: ProviderRegion
     @Binding var refreshInterval: RefreshIntervalOption
     let availableUpdateVersion: String?
     let isCheckingForUpdates: Bool
@@ -17,6 +18,34 @@ struct DashboardView: View {
     var providerOrder: [ProviderID] = ProviderID.allCases
 
     var section: DashboardSection? = nil
+
+    init(
+        store: UsageStore,
+        launchAtLogin: LaunchAtLoginController,
+        usageDisplayMode: Binding<UsageDisplayMode>,
+        selectedRegion: Binding<ProviderRegion> = .constant(.us),
+        refreshInterval: Binding<RefreshIntervalOption>,
+        availableUpdateVersion: String?,
+        isCheckingForUpdates: Bool,
+        checkForUpdates: @escaping @MainActor () -> Void = {},
+        openSettings: @escaping @MainActor () -> Void = {},
+        openAnalytics: @escaping @MainActor () -> Void = {},
+        providerOrder: [ProviderID] = ProviderID.allCases,
+        section: DashboardSection? = nil
+    ) {
+        self.store = store
+        self.launchAtLogin = launchAtLogin
+        self._usageDisplayMode = usageDisplayMode
+        self._selectedRegion = selectedRegion
+        self._refreshInterval = refreshInterval
+        self.availableUpdateVersion = availableUpdateVersion
+        self.isCheckingForUpdates = isCheckingForUpdates
+        self.checkForUpdates = checkForUpdates
+        self.openSettings = openSettings
+        self.openAnalytics = openAnalytics
+        self.providerOrder = providerOrder
+        self.section = section
+    }
 
     var body: some View {
         Group {
@@ -31,13 +60,19 @@ struct DashboardView: View {
     }
 
     private var content: DashboardContentView {
-        DashboardContentView(store: store, usageDisplayMode: $usageDisplayMode, providerOrder: providerOrder)
+        DashboardContentView(
+            store: store,
+            usageDisplayMode: $usageDisplayMode,
+            selectedRegion: $selectedRegion,
+            providerOrder: providerOrder
+        )
     }
 
     private var completeDashboard: some View {
         DashboardContentView(
             store: store,
             usageDisplayMode: $usageDisplayMode,
+            selectedRegion: $selectedRegion,
             providerOrder: providerOrder
         )
         .safeAreaBar(edge: .bottom, spacing: 0) {
@@ -176,7 +211,20 @@ struct RefreshButtonLabel: View {
 struct DashboardContentView: View {
     @Bindable var store: UsageStore
     @Binding var usageDisplayMode: UsageDisplayMode
+    @Binding var selectedRegion: ProviderRegion
     var providerOrder: [ProviderID] = ProviderID.allCases
+
+    init(
+        store: UsageStore,
+        usageDisplayMode: Binding<UsageDisplayMode>,
+        selectedRegion: Binding<ProviderRegion> = .constant(.us),
+        providerOrder: [ProviderID] = ProviderID.allCases
+    ) {
+        self.store = store
+        self._usageDisplayMode = usageDisplayMode
+        self._selectedRegion = selectedRegion
+        self.providerOrder = providerOrder
+    }
 
     var body: some View {
         VStack(spacing: 6) {
@@ -214,14 +262,28 @@ struct DashboardContentView: View {
     }
 
     private var topLevelProviders: [ProviderID] {
-        providerOrder.filter(store.isProviderVisibleInDashboard)
+        providerOrder.filter {
+            $0.region == selectedRegion && store.isProviderVisibleInDashboard($0)
+        }
     }
 
     var header: some View {
-        HStack {
+        HStack(spacing: 8) {
             Text("AI Usage")
                 .font(.headline.weight(.semibold))
             Spacer()
+            Picker("Region", selection: $selectedRegion) {
+                ForEach(ProviderRegion.allCases) { region in
+                    Text(region.badgeTitle)
+                        .tag(region)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .controlSize(.small)
+            .frame(width: 116)
+            .accessibilityLabel("Provider region")
+            .accessibilityHint("Choose whether to show US or CN providers")
             Picker("Numbers", selection: $usageDisplayMode) {
                 ForEach(UsageDisplayMode.allCases) { mode in
                     Text(mode.title)

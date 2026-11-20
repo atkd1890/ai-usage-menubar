@@ -162,9 +162,9 @@ final class VisualSnapshotTests: XCTestCase {
             let width = AppSurfaceLayout.settingsWidth
             let size = measuredSize(of: view, width: width)
             XCTAssertEqual(size.width, width, accuracy: 0.5)
-            // Enabled products and Google grouping replace the original nine-row panel.
+            // Enabled products grouped into US and CN zones replace the original nine-row panel.
             // The native settings window constrains and scrolls taller content.
-            XCTAssertLessThan(size.height, 1300)
+            XCTAssertLessThan(size.height, 1500)
             XCTAssertGreaterThan(size.height, 300)
         }
 

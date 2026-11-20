@@ -67,23 +67,36 @@ struct SettingsView: View {
                 detail: "Choose what to track and what appears in the menu bar."
             )
 
-            providerRows
-                .padding(.horizontal, 12)
-                .padding(.vertical, 4)
-                .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+            ForEach(ProviderRegion.allCases) { region in
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(region.badgeTitle)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 4)
 
-
+                    providerRowsContent(descriptors(for: region), in: region)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 4)
+                        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+                }
+            }
         }
     }
 
-    private var providerRows: some View {
-        providerRowsContent(preferences.providerOrder.filter(\.isEnabledInBuild).map(\.descriptor))
+    private func regionOrder(for region: ProviderRegion) -> [ProviderID] {
+        preferences.providerOrder.filter { $0.isEnabledInBuild && $0.region == region }
+    }
+
+    private func descriptors(for region: ProviderRegion) -> [ProviderDescriptor] {
+        regionOrder(for: region).map(\.descriptor)
     }
 
     private func providerRowsContent(
-        _ descriptors: [ProviderDescriptor]
+        _ descriptors: [ProviderDescriptor],
+        in region: ProviderRegion
     ) -> some View {
-        VStack(spacing: 0) {
+        let space = Self.rowsSpace(for: region)
+        return VStack(spacing: 0) {
             ProviderSettingsHeader()
 
             Divider()
@@ -130,12 +143,12 @@ struct SettingsView: View {
                     },
                     isDragging: draggingProvider == descriptor.id,
                     reportFrame: { rowFrames[descriptor.id] = $0 },
-                    dragChanged: { handleDrag(of: descriptor.id, at: $0) },
+                    dragChanged: { handleDrag(of: descriptor.id, at: $0, in: region) },
                     dragEnded: { draggingProvider = nil },
                     move: { offset in
-                        preferences.moveProvider(descriptor.id, by: offset)
+                        moveProvider(descriptor.id, by: offset, in: region)
                     },
-                    rowsSpace: Self.rowsSpace,
+                    rowsSpace: space,
                     loginPreferences: preferences, loginChanged: { store.reconnect(providerIDs: [descriptor.id]) }
                 )
 
@@ -144,19 +157,29 @@ struct SettingsView: View {
                 }
             }
         }
-        .coordinateSpace(.named(Self.rowsSpace))
+        .coordinateSpace(.named(space))
     }
 
-    private static let rowsSpace = "providerRows"
+    private static func rowsSpace(for region: ProviderRegion) -> String {
+        "providerRows.\(region.rawValue)"
+    }
+
+    private func moveProvider(_ provider: ProviderID, by offset: Int, in region: ProviderRegion) {
+        let order = regionOrder(for: region)
+        guard let index = order.firstIndex(of: provider) else { return }
+        let targetIndex = index + offset
+        guard order.indices.contains(targetIndex) else { return }
+        preferences.moveProvider(provider, to: order[targetIndex])
+    }
 
     /// Live reorder: the dragged provider takes the place of the row the
     /// pointer has moved past.
-    private func handleDrag(of provider: ProviderID, at point: CGPoint) {
+    private func handleDrag(of provider: ProviderID, at point: CGPoint, in region: ProviderRegion) {
         draggingProvider = provider
         guard let target = ProviderRowDrag.target(
             of: provider,
             at: point.y,
-            order: preferences.providerOrder,
+            order: regionOrder(for: region),
             frames: rowFrames
         ) else { return }
         preferences.moveProvider(provider, to: target)
@@ -258,7 +281,7 @@ private struct ProviderSettingsHeader: View {
             Text("Provider")
                 .frame(width: 130, alignment: .leading)
             Text("Login method")
-                .frame(width: 180, alignment: .leading)
+                .frame(width: 192, alignment: .leading)
             Text("Track")
                 .frame(width: 44)
             Label("Menu Bar", systemImage: "menubar.rectangle")
@@ -341,24 +364,24 @@ private struct ProviderSettingsRow: View {
 
             if let preferences = loginPreferences {
                 VStack(alignment: .leading, spacing: 4) {
-                    Picker("Login method for \(displayName)", selection: Binding(
-                        get: { _ = loginRevision; return preferences.loginMethod(for: descriptor.id) },
-                        set: { method in
-                            preferences.setLoginMethod(method, for: descriptor.id)
-                            loginRevision += 1
-                            loginChanged()
-                        }
-                    )) {
-                        ForEach(ProviderLoginMethod.supported(for: descriptor.id)) { method in
-                            Text(method.title(for: descriptor.id)).tag(method)
-                        }
+                    let methods = ProviderLoginMethod.supported(for: descriptor.id)
+                    let currentMethod: ProviderLoginMethod = {
+                        _ = loginRevision
+                        return preferences.loginMethod(for: descriptor.id)
+                    }()
+                    FixedWidthPopUpButton(
+                        items: methods.map { .init(value: $0, title: $0.title(for: descriptor.id)) },
+                        selection: currentMethod,
+                        width: 184,
+                        accessibilityLabel: "Login method for \(displayName)",
+                        helpText: "Uses the selected credential source immediately and reports the quota fetch result beneath the provider name."
+                    ) { method in
+                        preferences.setLoginMethod(method, for: descriptor.id)
+                        loginRevision += 1
+                        loginChanged()
                     }
-                    .labelsHidden()
-                    .controlSize(.small)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .frame(width: 180, alignment: .leading)
-                    .help("Uses the selected credential source immediately and reports the quota fetch result beneath the provider name.")
-                    if [ProviderID.manus, .muse, .qwen, .kimi, .adobe].contains(descriptor.id),
+                    .frame(width: 184, alignment: .leading)
+                    if [ProviderID.manus, .muse, .qwen, .kimi, .adobe, .minimax, .qoder].contains(descriptor.id),
                        state?.failure?.kind == .storage {
                         let method = preferences.loginMethod(for: descriptor.id)
                         if method == .edge {
@@ -382,7 +405,7 @@ private struct ProviderSettingsRow: View {
 
                 }
                 .font(.caption)
-                .frame(width: 180, alignment: .leading)
+                .frame(width: 192, alignment: .leading)
             }
 
             Toggle(
@@ -721,6 +744,78 @@ private struct AlertSettingsView: View {
             }
             Spacer()
             Toggle(title, isOn: binding).labelsHidden()
+        }
+    }
+}
+
+private struct FixedWidthPopUpButton<Option: Hashable>: NSViewRepresentable {
+    struct Item: Equatable {
+        let value: Option
+        let title: String
+    }
+
+    let items: [Item]
+    let selection: Option
+    let width: CGFloat
+    let accessibilityLabel: String
+    let helpText: String
+    let onSelect: (Option) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(items: items, onSelect: onSelect)
+    }
+
+    func makeNSView(context: Context) -> NSPopUpButton {
+        let button = NSPopUpButton(frame: .zero, pullsDown: false)
+        button.controlSize = .small
+        button.font = .systemFont(ofSize: NSFont.systemFontSize(for: .small))
+        button.lineBreakMode = .byTruncatingTail
+        button.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        button.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        button.target = context.coordinator
+        button.action = #selector(Coordinator.selectionChanged(_:))
+        configure(button, context: context)
+        return button
+    }
+
+    func updateNSView(_ nsView: NSPopUpButton, context: Context) {
+        configure(nsView, context: context)
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSPopUpButton, context: Context) -> CGSize? {
+        CGSize(width: width, height: nsView.fittingSize.height)
+    }
+
+    private func configure(_ button: NSPopUpButton, context: Context) {
+        context.coordinator.items = items
+        context.coordinator.onSelect = onSelect
+        let titles = items.map(\.title)
+        if button.itemTitles != titles {
+            button.removeAllItems()
+            button.addItems(withTitles: titles)
+        }
+        if let selectedIndex = items.firstIndex(where: { $0.value == selection }),
+           button.indexOfSelectedItem != selectedIndex {
+            button.selectItem(at: selectedIndex)
+        }
+        button.setAccessibilityLabel(accessibilityLabel)
+        button.toolTip = helpText
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        var items: [Item]
+        var onSelect: (Option) -> Void
+
+        init(items: [Item], onSelect: @escaping (Option) -> Void) {
+            self.items = items
+            self.onSelect = onSelect
+        }
+
+        @objc func selectionChanged(_ sender: NSPopUpButton) {
+            let index = sender.indexOfSelectedItem
+            guard items.indices.contains(index) else { return }
+            onSelect(items[index].value)
         }
     }
 }

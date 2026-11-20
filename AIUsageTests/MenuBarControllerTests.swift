@@ -311,6 +311,53 @@ final class MenuBarControllerTests: XCTestCase {
         XCTAssertTrue(controller.usagePanel === panel)
     }
 
+    func testPanelRegionSwitchFiltersProvidersAndResizes() async throws {
+        let suite = "PanelRegionSwitch." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let preferences = AppPreferences(defaults: defaults)
+        XCTAssertEqual(preferences.selectedRegion, .us)
+
+        let store = UsageStore(
+            providers: [],
+            availabilityChecker: FixedProviderAvailabilityChecker(installed: Set(ProviderID.allCases))
+        )
+        let controller = MenuBarController(
+            store: store,
+            preferences: preferences,
+            launchAtLogin: LaunchAtLoginController(service: MenuBarControllerLoginService()),
+            updateController: UpdateController(startingUpdater: false),
+            application: RecordingApplicationActivator()
+        )
+        controller.start()
+        defer { controller.stop() }
+
+        let button = try XCTUnwrap(controller.currentStatusButton)
+        let action = try XCTUnwrap(button.action)
+        XCTAssertTrue(NSApplication.shared.sendAction(action, to: button.target, from: button))
+        try await Task.sleep(for: .milliseconds(200))
+
+        let panel = try XCTUnwrap(controller.usagePanel)
+        let panelView = try XCTUnwrap(panel.contentView as? DashboardPanelView)
+        let expectedUS = Set(ProviderID.enabledCases.filter { $0.region == .us })
+        let expectedCN = Set(ProviderID.enabledCases.filter { $0.region == .cn })
+
+        XCTAssertEqual(Set(panelView.sections.keys), expectedUS)
+        let usHeight = panel.frame.height
+
+        preferences.selectedRegion = .cn
+        try await Task.sleep(for: .milliseconds(200))
+
+        XCTAssertEqual(Set(panelView.sections.keys), expectedCN)
+        let cnHeight = panel.frame.height
+        XCTAssertLessThan(cnHeight, usHeight)
+
+        // All providers remain tracked for pinned menu bar status icons regardless of panel region.
+        XCTAssertEqual(Set(store.trackedProviderIDs), Set(preferences.trackedProviderIDs))
+        XCTAssertTrue(store.trackedProviderIDs.contains(.claude))
+    }
+
 }
 
 @MainActor

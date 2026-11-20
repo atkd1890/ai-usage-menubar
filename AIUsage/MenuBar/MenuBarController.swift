@@ -669,6 +669,7 @@ final class MenuBarController: NSObject, NSWindowDelegate {
                 ),
                 trackedProviders: preferences.trackedProviderIDs,
                 refreshInterval: preferences.refreshInterval,
+                selectedRegion: preferences.selectedRegion,
                 panelStates: store.states,
                 providerOrder: preferences.providerOrder
             )
@@ -975,9 +976,14 @@ final class DashboardPanelView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     private func synchronizeProviders() {
-        let ids = root.preferences.providerOrder.filter(root.store.isProviderVisibleInDashboard)
+        let selectedRegion = root.preferences.selectedRegion
+        let ids = root.preferences.providerOrder.filter {
+            $0.region == selectedRegion && root.store.isProviderVisibleInDashboard($0)
+        }
         guard ids != providerIDs else { return }
         providerIDs = ids
+        scrollView.contentView.scroll(to: .zero)
+        scrollView.reflectScrolledClipView(scrollView.contentView)
         for view in providerStack.arrangedSubviews {
             providerStack.removeArrangedSubview(view)
             view.removeFromSuperview()
@@ -1055,6 +1061,7 @@ struct DashboardRootView: View {
             store: store,
             launchAtLogin: launchAtLogin,
             usageDisplayMode: $preferences.usageDisplayMode,
+            selectedRegion: $preferences.selectedRegion,
             refreshInterval: $preferences.refreshInterval,
             availableUpdateVersion: updateController.availableVersion,
             isCheckingForUpdates: updateController.isChecking,
