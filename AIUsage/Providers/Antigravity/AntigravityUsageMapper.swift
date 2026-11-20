@@ -28,7 +28,9 @@ enum AntigravityUsageMapper {
     static func summary(
         _ hostSummaries: [AntigravityHostSummary],
         planName: String?,
-        now: Date
+        now: Date,
+        extraDetails: [ProviderUsageDetail] = [],
+        extraWarnings: [ProviderDiagnosticWarning] = []
     ) -> ProviderSnapshot? {
         var parsedByHost: [AntigravityHost: (windows: [QuotaWindow], notices: [ProviderUsageDetail])] = [:]
         for item in hostSummaries where parsedByHost[item.host] == nil {
@@ -40,6 +42,18 @@ enum AntigravityUsageMapper {
         let presentHosts = orderedHosts.filter { parsedByHost[$0] != nil }
         guard !presentHosts.isEmpty else { return nil }
 
+        let summaryWarnings = hostSummaries.flatMap(quotaSummaryWarnings)
+        let combinedWarnings = ResponseSchemaWatch.deduplicated(extraWarnings + summaryWarnings)
+
+        func mergeDetails(_ base: [ProviderUsageDetail]) -> [ProviderUsageDetail] {
+            var merged = base
+            var seen = Set(base.map(\.id))
+            for detail in extraDetails where seen.insert(detail.id).inserted {
+                merged.append(detail)
+            }
+            return merged
+        }
+
         if presentHosts.count == 1, let onlyHost = presentHosts.first, let parsed = parsedByHost[onlyHost] {
             return ProviderSnapshot(
                 provider: .antigravity,
@@ -47,7 +61,8 @@ enum AntigravityUsageMapper {
                 windows: parsed.windows,
                 fetchedAt: now,
                 usageScope: "Antigravity quota · separate from Gemini app",
-                usageDetails: parsed.notices
+                usageDetails: mergeDetails(parsed.notices),
+                diagnosticWarnings: combinedWarnings
             )
         }
 
@@ -114,8 +129,9 @@ enum AntigravityUsageMapper {
             windows: mergedWindows,
             fetchedAt: now,
             usageScope: "Antigravity quota · separate from Gemini app",
-            usageDetails: notices,
-            quotaSections: quotaSections
+            usageDetails: mergeDetails(notices),
+            quotaSections: quotaSections,
+            diagnosticWarnings: combinedWarnings
         )
     }
 
@@ -254,6 +270,126 @@ enum AntigravityUsageMapper {
             return nil
         }
         return trimmed(root["cloudaicompanionProject"])
+    }
+
+    static func aiCreditsDetail(_ data: Data?) -> ProviderUsageDetail? {
+        guard let data,
+              let root = try? ProviderParsing.object(from: data),
+              let paidTier = ProviderParsing.object(root["paidTier"]),
+              let available = paidTier["availableCredits"] as? [Any],
+              !available.isEmpty else {
+            return nil
+        }
+        for rawItem in available {
+            guard let item = ProviderParsing.object(rawItem),
+                  ProviderParsing.string(item["creditType"]) == "GOOGLE_ONE_AI" else {
+                continue
+            }
+            let amount = QuotaDiscovery.number(item["creditAmount"]) ?? 0
+            return ProviderUsageDetail(
+                id: "antigravity.ai.credits",
+                title: "Additional Credits",
+                value: "AI Credits \(QuotaWindow.formatCount(amount))"
+            )
+        }
+        return nil
+    }
+
+    static func codeAssistWarnings(_ data: Data?, headers: [String: String] = [:]) -> [ProviderDiagnosticWarning] {
+        var warnings = ResponseSchemaWatch.httpHeaders(
+            HTTPResponse(statusCode: 200, headers: headers, body: Data()),
+            provider: .antigravity,
+            endpoint: "Antigravity loadCodeAssist"
+        )
+        guard let data, let root = try? ProviderParsing.object(from: data) else {
+            return warnings
+        }
+        warnings += ResponseSchemaWatch.jsonBodyDeprecation(root, provider: .antigravity, endpoint: "Antigravity loadCodeAssist")
+        warnings += ResponseSchemaWatch.confirmedJSONKeys(
+            in: root,
+            provider: .antigravity,
+            endpoint: "Antigravity loadCodeAssist"
+        )
+        if let paidTier = ProviderParsing.object(root["paidTier"]) {
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(
+                in: paidTier,
+                provider: .antigravity,
+                endpoint: "Antigravity paidTier"
+            )
+            if let tierID = ProviderParsing.string(paidTier["id"]),
+               let enumWarning = ResponseSchemaWatch.confirmedEnum(
+                   tierID,
+                   provider: .antigravity,
+                   endpoint: "Antigravity paidTier",
+                   field: "paidTier.id"
+               ) {
+                warnings.append(enumWarning)
+            }
+            if let credits = paidTier["availableCredits"] as? [Any] {
+                for rawCredit in credits {
+                    guard let credit = ProviderParsing.object(rawCredit) else { continue }
+                    warnings += ResponseSchemaWatch.confirmedJSONKeys(
+                        in: credit,
+                        provider: .antigravity,
+                        endpoint: "Antigravity availableCredits"
+                    )
+                    if let creditType = ProviderParsing.string(credit["creditType"]),
+                       let enumWarning = ResponseSchemaWatch.confirmedEnum(
+                           creditType,
+                           provider: .antigravity,
+                           endpoint: "Antigravity availableCredits",
+                           field: "creditType"
+                       ) {
+                        warnings.append(enumWarning)
+                    }
+                }
+            }
+        }
+        return ResponseSchemaWatch.deduplicated(warnings)
+    }
+
+    private static func quotaSummaryWarnings(for summary: AntigravityHostSummary) -> [ProviderDiagnosticWarning] {
+        let endpoint = "Antigravity quotaSummary"
+        var warnings = ResponseSchemaWatch.httpHeaders(
+            HTTPResponse(statusCode: 200, headers: summary.headers, body: Data()),
+            provider: .antigravity,
+            endpoint: endpoint
+        )
+        guard let root = try? ProviderParsing.object(from: summary.data) else {
+            return warnings
+        }
+        let container = ProviderParsing.object(root["response"]) ?? root
+        warnings += ResponseSchemaWatch.jsonBodyDeprecation(container, provider: .antigravity, endpoint: endpoint)
+        warnings += ResponseSchemaWatch.confirmedJSONKeys(
+            in: root,
+            provider: .antigravity,
+            endpoint: endpoint,
+            requirePresent: root["response"] == nil
+        )
+        if let wrapped = ProviderParsing.object(root["response"]) {
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(
+                in: wrapped,
+                provider: .antigravity,
+                endpoint: endpoint
+            )
+        }
+        if let groupList = container["groups"] as? [[String: Any]] {
+            for group in groupList {
+                warnings += ResponseSchemaWatch.confirmedJSONKeys(
+                    in: group,
+                    provider: .antigravity,
+                    endpoint: "Antigravity group"
+                )
+                for bucket in ProviderParsing.array(group["buckets"]) {
+                    warnings += ResponseSchemaWatch.confirmedJSONKeys(
+                        in: bucket,
+                        provider: .antigravity,
+                        endpoint: "Antigravity bucket"
+                    )
+                }
+            }
+        }
+        return warnings
     }
 
     private static func groups(_ data: Data) -> [[String: Any]]? {

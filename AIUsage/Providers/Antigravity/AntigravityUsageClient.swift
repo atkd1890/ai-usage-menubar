@@ -3,7 +3,7 @@ import Foundation
 /// The result of `loadCodeAssist`, which carries the plan and the Cloud
 /// project the quota summary is scoped to.
 enum AntigravityCodeAssistOutcome: Sendable {
-    case success(Data)
+    case success(Data, headers: [String: String])
     case tokenRefused
     /// `403`: the token is valid, but Google does not share Code Assist for
     /// this account. The plan and project only refine the read, so this is
@@ -41,6 +41,13 @@ enum AntigravityHost: String, Equatable, Sendable, CaseIterable {
 struct AntigravityHostSummary: Equatable, Sendable {
     let host: AntigravityHost
     let data: Data
+    let headers: [String: String]
+
+    init(host: AntigravityHost, data: Data, headers: [String: String] = [:]) {
+        self.host = host
+        self.data = data
+        self.headers = headers
+    }
 }
 
 /// The result of `retrieveUserQuotaSummary` across both Cloud Code hosts.
@@ -96,26 +103,33 @@ struct AntigravityUsageClient: Sendable {
     static let googleClientSecret =
         "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"
 
+    static let installedAppVersion: String? = {
+        let paths = ["/Applications/Antigravity.app", expandHome("~/Applications/Antigravity.app")]
+        return paths.compactMap { Bundle(url: URL(fileURLWithPath: $0))?
+            .object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String }.first
+    }()
+
     /// The Antigravity client's own User-Agent shape. Google answers other
     /// callers without the Gemini quota group and without `paidTier`.
-    static let userAgent: String = {
+    static let userAgent: String = clientUserAgent(version: installedAppVersion)
+
+    static func clientUserAgent(version: String?) -> String {
+        let minimum = "2.26.0"
+        let selected = version.flatMap {
+            $0.range(of: #"^\d+\.\d+\.\d+$"#, options: .regularExpression) != nil &&
+            $0.compare(minimum, options: .numeric) != .orderedAscending ? $0 : nil
+        } ?? minimum
         #if arch(arm64)
         let architecture = "arm64"
         #else
         let architecture = "amd64"
         #endif
-        return "antigravity/2.24.0 (aidev_client; os_type=darwin; " +
-            "arch=\(architecture))"
-    }()
+        return "antigravity/\(selected) (aidev_client; os_type=darwin; arch=\(architecture))"
+    }
 
     /// Argon is omitted for the legacy bare client identity even on a paid account.
     /// Use the installed hub version, with the minimum verified Argon-compatible identity.
-    static let quotaSummaryUserAgent: String = {
-        let paths = ["/Applications/Antigravity.app", expandHome("~/Applications/Antigravity.app")]
-        let version = paths.compactMap { Bundle(url: URL(fileURLWithPath: $0))?
-            .object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String }.first
-        return hubUserAgent(version: version)
-    }()
+    static let quotaSummaryUserAgent: String = hubUserAgent(version: installedAppVersion)
 
     static func hubUserAgent(version: String?) -> String {
         let minimum = "2.26.0"
@@ -158,7 +172,7 @@ struct AntigravityUsageClient: Sendable {
                 continue
             }
             if (200..<300).contains(response.statusCode) {
-                return .success(response.body)
+                return .success(response.body, headers: response.headers)
             }
             if response.statusCode == 401 {
                 sawRefused = true
@@ -209,7 +223,7 @@ struct AntigravityUsageClient: Sendable {
 
         let summaries = responses
             .filter { (200..<300).contains($0.response.statusCode) }
-            .map { AntigravityHostSummary(host: $0.host, data: $0.response.body) }
+            .map { AntigravityHostSummary(host: $0.host, data: $0.response.body, headers: $0.response.headers) }
         if !summaries.isEmpty {
             return .success(summaries)
         }

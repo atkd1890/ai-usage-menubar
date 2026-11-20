@@ -39,9 +39,27 @@ enum CopilotUsageMapper {
             windows.append(completions)
         }
 
+        var warnings = ResponseSchemaWatch.httpHeaders(response, provider: .copilot, endpoint: "GitHub Copilot")
+        warnings += ResponseSchemaWatch.jsonBodyDeprecation(body, provider: .copilot, endpoint: "GitHub Copilot")
+        warnings += ResponseSchemaWatch.confirmedJSONKeys(in: body, provider: .copilot, endpoint: "GitHub Copilot")
+        if let plan = ProviderParsing.string(body["copilot_plan"]),
+           let enumWarning = ResponseSchemaWatch.confirmedEnum(plan, provider: .copilot, endpoint: "GitHub Copilot", field: "copilot_plan") {
+            warnings.append(enumWarning)
+        }
+        if let sku = ProviderParsing.string(body["access_type_sku"]),
+           let enumWarning = ResponseSchemaWatch.confirmedEnum(sku, provider: .copilot, endpoint: "GitHub Copilot", field: "access_type_sku") {
+            warnings.append(enumWarning)
+        }
+
         var notices: [ProviderUsageDetail] = []
-        for key in (snapshots ?? [:]).keys.sorted() where !["chat", "completions", "premium_interactions"].contains(key) {
-            guard let bucket = ProviderParsing.object(snapshots?[key]) else { continue }
+        for (key, rawBucket) in (snapshots ?? [:]).sorted(by: { $0.key < $1.key }) {
+            guard let bucket = ProviderParsing.object(rawBucket) else { continue }
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(
+                in: bucket,
+                provider: .copilot,
+                endpoint: "Copilot bucket"
+            )
+            guard !["chat", "completions", "premium_interactions"].contains(key) else { continue }
             if let window = quotaWindow(bucket, kind: .additional(id: "copilot." + key, title: QuotaDiscovery.name(key)), resetsAt: reset) {
                 windows.append(window)
             } else if bucket["has_quota"] as? Bool != false && bucket["unlimited"] as? Bool != true &&
@@ -86,7 +104,8 @@ enum CopilotUsageMapper {
             fetchedAt: now,
             usageScope: "Account usage · quotas and credits shown separately",
             usageDetails: quotaAllowanceDetails(body) + notices,
-            additionalUsageEnabled: overagePermitted
+            additionalUsageEnabled: overagePermitted,
+            diagnosticWarnings: ResponseSchemaWatch.deduplicated(warnings)
         )
     }
 

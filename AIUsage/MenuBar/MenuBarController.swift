@@ -624,12 +624,25 @@ final class MenuBarController: NSObject, NSWindowDelegate {
     func handlePanelEvent(_ event: NSEvent) -> NSEvent? {
         if event.type == .keyDown {
             if event.keyCode == 53, event.window === usagePanel { hidePanel(); return nil }
+        } else if let window = event.window, isOwnedPanelWindow(window) {
+            return event
         } else if event.window !== usagePanel {
             if let statusWindow = statusItem?.button?.window, event.window === statusWindow { return event }
             let point = event.window?.convertPoint(toScreen: event.locationInWindow) ?? event.locationInWindow
             if !isStatusItemPoint(point) { hidePanel() }
         }
         return event
+    }
+
+    private func isOwnedPanelWindow(_ window: NSWindow) -> Bool {
+        var current: NSWindow? = window
+        while let candidate = current {
+            if candidate === usagePanel || usagePanel?.childWindows?.contains(where: { $0 === candidate }) == true {
+                return true
+            }
+            current = candidate.parent
+        }
+        return false
     }
 
     private func isStatusItemPoint(_ point: NSPoint) -> Bool {

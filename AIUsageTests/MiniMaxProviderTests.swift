@@ -301,4 +301,41 @@ final class MiniMaxProviderTests: XCTestCase {
         XCTAssertEqual(snap.planName, "Free")
         XCTAssertEqual(snap.usageDetails.map(\.value), ["Design 120 · Hailuo 40"])
     }
+
+    func testActiveTokenPlanWithTotalCreditsRendersBoundedTokenPlanProgress() throws {
+        let now = Date(timeIntervalSince1970: 1_795_109_900)
+        let snapshot = try MiniMaxProvider.map(
+            remains: httpResponse(200, json: """
+            {
+              "model_remains": [{
+                "model_name": "general",
+                "current_interval_used_percent": 10,
+                "current_interval_total_percent": 100,
+                "current_weekly_used_percent": 20,
+                "current_weekly_total_percent": 100
+              }],
+              "base_resp": {"status_code": 0}
+            }
+            """),
+            tokenPlanCredit: httpResponse(200, json: """
+            {
+              "remaining_credits": 1500,
+              "total_credits": 2000,
+              "used_credits": 500,
+              "base_resp": {"status_code": 0}
+            }
+            """),
+            membership: httpResponse(200, json: #"{"token_plan_tier":"Pro","base_resp":{"status_code":0}}"#),
+            now: now
+        )
+
+        XCTAssertTrue(snapshot.allDiagnosticWarnings.isEmpty)
+        let tokenPlanDetail = try XCTUnwrap(snapshot.usageDetails.first(where: { $0.id == "minimax.agent.credits" }))
+        XCTAssertEqual(tokenPlanDetail.title, "Token Plan Credits")
+        XCTAssertEqual(tokenPlanDetail.value, "1,500 / 2,000 left")
+        XCTAssertEqual(
+            tokenPlanDetail.boundedProgress,
+            BoundedCreditProgress(label: "Token Plan", used: 500, limit: 2000, resetsAt: nil, resetNote: "No reset")
+        )
+    }
 }

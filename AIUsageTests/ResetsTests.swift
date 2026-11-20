@@ -26,6 +26,25 @@ final class ResetsTests: XCTestCase {
         XCTAssertEqual(resets.expirations.count, 3)
         XCTAssertEqual(resets.nextExpiration, Date(timeIntervalSince1970: 1_800_172_800))
         XCTAssertTrue(resets.hasUnknownExpirations)
+        XCTAssertNil(resets.usableCount)
+    }
+
+    func testClaudeGrantsComputeUsableCountFromUsableNow() throws {
+        let grants = try XCTUnwrap(ClaudeResetGrants.parse(json("""
+        {
+          "eligible": true,
+          "grants": [
+            {"id": "spent", "resets_left": 0, "ends_at": 1800172800, "usable_now": false},
+            {"id": "ready", "resets_left": 1, "ends_at": 1800259200, "usable_now": true},
+            {"id": "cooldown", "resets_left": 1, "ends_at": 1800345600, "usable_now": false},
+            {"id": "expired", "resets_left": 1, "ends_at": 1799990000, "usable_now": true}
+          ]
+        }
+        """)))
+
+        let resets = grants.resets(at: now)
+        XCTAssertEqual(resets.availableCount, 2)
+        XCTAssertEqual(resets.usableCount, 1)
     }
 
     func testClaudeGrantsTellZeroFromUnknown() {

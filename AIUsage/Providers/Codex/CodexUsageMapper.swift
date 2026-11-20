@@ -4,13 +4,42 @@ import Foundation
 struct CodexResetCreditList: Equatable, Sendable {
     let availableCount: Int
     let expirations: [Date]
+    let diagnosticWarnings: [ProviderDiagnosticWarning]
 
-    static func parse(_ data: Data) -> CodexResetCreditList? {
+    init(
+        availableCount: Int,
+        expirations: [Date],
+        diagnosticWarnings: [ProviderDiagnosticWarning] = []
+    ) {
+        self.availableCount = availableCount
+        self.expirations = expirations
+        self.diagnosticWarnings = diagnosticWarnings
+    }
+
+    static func parse(_ data: Data, headers: [String: String] = [:]) -> CodexResetCreditList? {
         guard let body = try? ProviderParsing.object(from: data),
               let count = CodexUsageMapper.availableResetCount(body) else {
             return nil
         }
+        var warnings = ResponseSchemaWatch.httpHeaders(
+            HTTPResponse(statusCode: 200, headers: headers, body: Data()),
+            provider: .codex,
+            endpoint: "Codex reset_credits"
+        )
+        warnings += ResponseSchemaWatch.jsonBodyDeprecation(body, provider: .codex, endpoint: "Codex reset_credits")
+        warnings += ResponseSchemaWatch.confirmedJSONKeys(
+            in: body,
+            provider: .codex,
+            endpoint: "Codex reset_credits"
+        )
         let credits = body["credits"] as? [[String: Any]] ?? []
+        for credit in credits {
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(
+                in: credit,
+                provider: .codex,
+                endpoint: "Codex reset_credit"
+            )
+        }
         let expirations = credits
             .filter { credit in
                 guard let status = ProviderParsing.string(credit["status"]) else {
@@ -19,7 +48,11 @@ struct CodexResetCreditList: Equatable, Sendable {
                 return status == "available"
             }
             .compactMap { ProviderParsing.date($0["expires_at"]) }
-        return CodexResetCreditList(availableCount: count, expirations: expirations)
+        return CodexResetCreditList(
+            availableCount: count,
+            expirations: expirations,
+            diagnosticWarnings: ResponseSchemaWatch.deduplicated(warnings)
+        )
     }
 }
 
@@ -80,7 +113,58 @@ enum CodexUsageMapper {
             windows += discoveredWindows(review, id: "codex.review", title: "Code Review", now: now, notices: &details)
         }
 
+        var warnings = ResponseSchemaWatch.httpHeaders(response, provider: .codex, endpoint: "Codex")
+        warnings += ResponseSchemaWatch.jsonBodyDeprecation(body, provider: .codex, endpoint: "Codex")
+        warnings += ResponseSchemaWatch.confirmedJSONKeys(in: body, provider: .codex, endpoint: "Codex")
+        if let planType = ProviderParsing.string(body["plan_type"]),
+           let enumWarning = ResponseSchemaWatch.confirmedEnum(
+               planType,
+               provider: .codex,
+               endpoint: "Codex",
+               field: "plan_type"
+           ) {
+            warnings.append(enumWarning)
+        }
+        if let rateLimit = ProviderParsing.object(body["rate_limit"]) {
+            warnings += rateLimitWarnings(in: rateLimit)
+        }
+        if let entries = body["additional_rate_limits"] as? [Any] {
+            for rawEntry in entries {
+                if let entry = ProviderParsing.object(rawEntry),
+                   let rl = ProviderParsing.object(entry["rate_limit"]) {
+                    warnings += rateLimitWarnings(in: rl)
+                }
+            }
+        }
+        if let review = ProviderParsing.object(body["code_review_rate_limit"]) {
+            warnings += rateLimitWarnings(in: review)
+        }
+
         let creditsObject = ProviderParsing.object(body["credits"])
+        if let creditsObject {
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(
+                in: creditsObject,
+                provider: .codex,
+                endpoint: "Codex credits"
+            )
+        }
+        if let resetCredits = ProviderParsing.object(body["rate_limit_reset_credits"]) {
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(
+                in: resetCredits,
+                provider: .codex,
+                endpoint: "Codex rate_limit_reset_credits"
+            )
+        }
+        if let spendControl = ProviderParsing.object(body["spend_control"]) {
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(
+                in: spendControl,
+                provider: .codex,
+                endpoint: "Codex spend_control"
+            )
+        }
+        if let resetCreditList {
+            warnings += resetCreditList.diagnosticWarnings
+        }
         let hasCredits = (creditsObject?["has_credits"] as? Bool)
             ?? boolean(response.header("x-codex-credits-has-credits"))
         if hasCredits != false && creditsObject?["unlimited"] as? Bool == true {
@@ -106,8 +190,27 @@ enum CodexUsageMapper {
             accountEmail: AccountEmail.validated(body["email"]),
             usageScope: "Shared allowance · Codex & ChatGPT Work",
             usageDetails: details,
-            additionalUsageEnabled: hasCredits
+            additionalUsageEnabled: hasCredits,
+            diagnosticWarnings: ResponseSchemaWatch.deduplicated(warnings)
         )
+    }
+
+    private static func rateLimitWarnings(in rateLimit: [String: Any]) -> [ProviderDiagnosticWarning] {
+        var warnings = ResponseSchemaWatch.confirmedJSONKeys(
+            in: rateLimit,
+            provider: .codex,
+            endpoint: "Codex rate_limit"
+        )
+        for slot in ["primary_window", "secondary_window"] {
+            if let win = ProviderParsing.object(rateLimit[slot]) {
+                warnings += ResponseSchemaWatch.confirmedJSONKeys(
+                    in: win,
+                    provider: .codex,
+                    endpoint: "Codex window"
+                )
+            }
+        }
+        return warnings
     }
 
     private static func discoveredWindows(_ source: [String: Any], id: String, title: String, now: Date,

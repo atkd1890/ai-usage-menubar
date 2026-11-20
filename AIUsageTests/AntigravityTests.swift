@@ -173,6 +173,8 @@ final class AntigravityTests: XCTestCase {
         XCTAssertEqual(summaries.map(\.host), [.ide, .app])
         let snapshot = try XCTUnwrap(AntigravityUsageMapper.summary(summaries, planName: nil, now: now))
         let argon = try XCTUnwrap(snapshot.windows.first { $0.kind == .argonWeekly })
+        XCTAssertEqual(argon.kind.title, "Argon")
+        XCTAssertEqual(MenuBarMetricID.argonWeekly.title, "Argon")
         XCTAssertEqual(argon.usedPercent, 99.17)
         XCTAssertEqual(argon.resetsAt, ISO8601DateFormatter().date(from: "2026-11-18T10:06:53Z"))
         let requests = await http.capturedRequests()

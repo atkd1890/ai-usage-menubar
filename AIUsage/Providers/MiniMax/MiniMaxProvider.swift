@@ -729,9 +729,29 @@ actor MiniMaxProvider: UsageProvider {
         var windows: [QuotaWindow] = []
         var details: [ProviderUsageDetail] = []
 
+        var warnings: [ProviderDiagnosticWarning] = []
+        for resp in [remains, tokenPlanCredit, membership, wallet, profile, hailuoCredit, hailuoEquity].compactMap({ $0 }) {
+            warnings += ResponseSchemaWatch.httpHeaders(resp, provider: .minimax, endpoint: "MiniMax")
+            if let obj = try? ProviderParsing.object(from: resp.body) {
+                warnings += ResponseSchemaWatch.jsonBodyDeprecation(obj, provider: .minimax, endpoint: "MiniMax")
+            }
+        }
+
         if let remains, remains.statusCode == 200,
            let remainsObj = try? ProviderParsing.object(from: remains.body) {
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(
+                in: remainsObj,
+                provider: .minimax,
+                endpoint: "MiniMax remains"
+            )
             let models = ProviderParsing.array(remainsObj["model_remains"])
+            for model in models {
+                warnings += ResponseSchemaWatch.confirmedJSONKeys(
+                    in: model,
+                    provider: .minimax,
+                    endpoint: "MiniMax model_remains"
+                )
+            }
             if !models.isEmpty {
                 let primary = models.first { ProviderParsing.string($0["model_name"]) == "general" }
                     ?? models.first {
@@ -795,13 +815,27 @@ actor MiniMaxProvider: UsageProvider {
             guard resp.statusCode == 200, let obj = try? ProviderParsing.object(from: resp.body) else { return nil }
             return ProviderParsing.object(obj["data"]) ?? ProviderParsing.object(obj["membership_info"]) ?? obj
         }
+        if let membershipRoot {
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(
+                in: membershipRoot,
+                provider: .minimax,
+                endpoint: "MiniMax membership"
+            )
+        }
 
         var agentCreditsAmount: Double?
+        var agentCreditsTotal: Double?
         if let tokenPlanCredit, tokenPlanCredit.statusCode == 200,
            let creditObj = try? ProviderParsing.object(from: tokenPlanCredit.body) {
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(
+                in: creditObj,
+                provider: .minimax,
+                endpoint: "MiniMax tokenPlanCredit"
+            )
             let breakdown = ProviderParsing.object(creditObj["balance_breakdown"])
             agentCreditsAmount = QuotaDiscovery.number(creditObj["remaining_credits"])
                 ?? QuotaDiscovery.number(breakdown?["total_balance"])
+            agentCreditsTotal = QuotaDiscovery.number(creditObj["total_credits"])
         }
         if (agentCreditsAmount ?? 0) <= 0, let membershipRoot {
             let opSummary = ProviderParsing.object(membershipRoot["op_credit_summary"])
@@ -833,7 +867,21 @@ actor MiniMaxProvider: UsageProvider {
             guard resp.statusCode == 200 else { return nil }
             return try? ProviderParsing.object(from: resp.body)
         }
+        if let walletObj {
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(
+                in: walletObj,
+                provider: .minimax,
+                endpoint: "MiniMax wallet"
+            )
+        }
         let walletEntries = ProviderParsing.array(walletObj?["wallets"])
+        for entry in walletEntries {
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(
+                in: entry,
+                provider: .minimax,
+                endpoint: "MiniMax wallet item"
+            )
+        }
         let designWallet = walletEntries.first { QuotaDiscovery.number($0["source"]) == 1 }
         let hailuoWallet = walletEntries.first { QuotaDiscovery.number($0["source"]) == 0 }
 
@@ -852,6 +900,13 @@ actor MiniMaxProvider: UsageProvider {
                   let obj = try? ProviderParsing.object(from: resp.body) else { return nil }
             return ProviderParsing.object(obj["data"]) ?? obj
         }
+        if let hailuoCreditData {
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(
+                in: hailuoCreditData,
+                provider: .minimax,
+                endpoint: "MiniMax hailuo credit"
+            )
+        }
         if let hailuoAmount = QuotaDiscovery.number(hailuoCreditData?["total_credit"])
             ?? QuotaDiscovery.number(hailuoWallet?["total_credit"]) {
             creditParts.append("Hailuo \(formatCredits(hailuoAmount))")
@@ -863,18 +918,40 @@ actor MiniMaxProvider: UsageProvider {
             value: creditParts.isEmpty ? "N/A" : creditParts.joined(separator: " · ")
         ))
 
-        if hasActiveTokenPlan, let agentCreditsAmount, agentCreditsAmount > 0 {
-            details.append(ProviderUsageDetail(
-                id: "minimax.agent.credits",
-                title: "Token Plan Credits",
-                value: "\(formatCredits(agentCreditsAmount)) credits"
-            ))
+        if hasActiveTokenPlan, let agentCreditsAmount {
+            if let total = agentCreditsTotal, total > 0, (0...total).contains(agentCreditsAmount) {
+                details.append(ProviderUsageDetail(
+                    id: "minimax.agent.credits",
+                    title: "Token Plan Credits",
+                    value: "\(formatCredits(agentCreditsAmount)) / \(formatCredits(total)) left",
+                    boundedProgress: BoundedCreditProgress(
+                        label: "Token Plan",
+                        used: max(total - agentCreditsAmount, 0),
+                        limit: total,
+                        resetsAt: nil,
+                        resetNote: "No reset"
+                    )
+                ))
+            } else if agentCreditsAmount > 0 {
+                details.append(ProviderUsageDetail(
+                    id: "minimax.agent.credits",
+                    title: "Token Plan Credits",
+                    value: "\(formatCredits(agentCreditsAmount)) credits"
+                ))
+            }
         }
 
         let hailuoEquityData = hailuoEquity.flatMap { resp -> [String: Any]? in
             guard resp.statusCode == 200,
                   let obj = try? ProviderParsing.object(from: resp.body) else { return nil }
             return ProviderParsing.object(obj["data"]) ?? obj
+        }
+        if let hailuoEquityData {
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(
+                in: hailuoEquityData,
+                provider: .minimax,
+                endpoint: "MiniMax hailuo equity"
+            )
         }
 
         let planCandidates: [String?] = [
@@ -889,6 +966,13 @@ actor MiniMaxProvider: UsageProvider {
             guard resp.statusCode == 200 else { return nil }
             return try? ProviderParsing.object(from: resp.body)
         }
+        if let profileObj {
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(
+                in: profileObj,
+                provider: .minimax,
+                endpoint: "MiniMax profile"
+            )
+        }
         let email = AccountEmail.validated(profileObj?["account"])
             ?? AccountEmail.validated(membershipRoot?["email"])
             ?? AccountEmail.validated(membershipRoot?["user_email"])
@@ -901,7 +985,8 @@ actor MiniMaxProvider: UsageProvider {
             credentialSource: credentialSource,
             accountLabel: email ?? historyID,
             accountEmail: email,
-            usageDetails: details
+            usageDetails: details,
+            diagnosticWarnings: ResponseSchemaWatch.deduplicated(warnings)
         )
     }
 

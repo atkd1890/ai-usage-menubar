@@ -26,31 +26,111 @@ enum GeminiUsageMapper {
               let rpcs = viewer["rpcs"] as? [String: Any],
               let usage = rpcs["getUsageInfo"] as? [String: Any],
               let pools = usage["pools"] as? [[String: Any]] else { throw changedResponse }
+
+        var warnings = ResponseSchemaWatch.httpHeaders(response, provider: .gemini, endpoint: "Gemini Web")
+        warnings += ResponseSchemaWatch.jsonBodyDeprecation(usage, provider: .gemini, endpoint: "Gemini Web getUsageInfo")
+        warnings += ResponseSchemaWatch.confirmedJSONKeys(
+            in: usage,
+            provider: .gemini,
+            endpoint: "Gemini Web getUsageInfo"
+        )
+        if let tier = usage["subscriptionTier"] as? String,
+           let enumWarning = ResponseSchemaWatch.confirmedEnum(
+               tier,
+               provider: .gemini,
+               endpoint: "Gemini Web getUsageInfo",
+               field: "subscriptionTier"
+           ) {
+            warnings.append(enumWarning)
+        }
+
         let definitions: [(String, QuotaKind)] = [("GXU_FIVE_HOURLY", .session), ("GXU_WEEKLY", .weekly)]
         var windows = definitions.compactMap { type, kind -> QuotaWindow? in
             guard let pool = pools.first(where: { $0["poolType"] as? String == type }),
                   let fraction = ProviderParsing.double(pool["percentageUsed"]),
                   fraction.isFinite, fraction >= 0 else { return nil }
             let gxu = pool["gxu"] as? [String: Any]
-            return QuotaWindow(kind: kind, usedPercent: fraction * 100,
-                resetsAt: ProviderParsing.date(gxu?["windowRefreshesAt"]))
+            let remainingCount = QuotaDiscovery.number(gxu?["remaining"])
+            let limitCount = QuotaDiscovery.number(gxu?["limit"] ?? gxu?["total"])
+            return QuotaWindow(
+                kind: kind,
+                usedPercent: fraction * 100,
+                resetsAt: ProviderParsing.date(gxu?["windowRefreshesAt"]),
+                remainingCount: remainingCount,
+                limitCount: limitCount
+            )
         }
-        var notices: [ProviderUsageDetail] = []
+        var details: [ProviderUsageDetail] = []
+        var sawOveragePoolCredits = false
         for pool in pools {
-            guard let type = pool["poolType"] as? String, !definitions.contains(where: { $0.0 == type }) else { continue }
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(
+                in: pool,
+                provider: .gemini,
+                endpoint: "Gemini Web pool"
+            )
+            if let gxu = pool["gxu"] as? [String: Any] {
+                warnings += ResponseSchemaWatch.confirmedJSONKeys(
+                    in: gxu,
+                    provider: .gemini,
+                    endpoint: "Gemini Web gxu"
+                )
+            }
+            guard let type = pool["poolType"] as? String else { continue }
+            if let enumWarning = ResponseSchemaWatch.confirmedEnum(
+                type,
+                provider: .gemini,
+                endpoint: "Gemini Web pool",
+                field: "poolType"
+            ) {
+                warnings.append(enumWarning)
+            }
+            if type == "OVERAGE_CREDITS" {
+                let creditsObj = (pool["credits"] as? [String: Any]) ?? (pool["overageCredits"] as? [String: Any])
+                if let amount = QuotaDiscovery.number(
+                    creditsObj?["creditsRemaining"]
+                        ?? pool["creditsRemaining"]
+                        ?? creditsObj?["remaining"]
+                        ?? pool["remaining"]
+                ) {
+                    details.append(ProviderUsageDetail(
+                        id: "gemini.overage.credits",
+                        title: "Additional Credits",
+                        value: "AI Credits \(QuotaWindow.formatCount(amount))"
+                    ))
+                    sawOveragePoolCredits = true
+                }
+                continue
+            }
+            guard !definitions.contains(where: { $0.0 == type }) else { continue }
             guard !(pool["percentageUsed"] is NSNull) else { continue }
             let ratio = QuotaDiscovery.number(pool["percentageUsed"])
+            let gxu = pool["gxu"] as? [String: Any]
             if let window = QuotaDiscovery.window(id: "gemini.pool." + type, title: QuotaDiscovery.name(type),
-                used: ratio.map { $0 * 100 }, reset: ProviderParsing.date((pool["gxu"] as? [String: Any])?["windowRefreshesAt"])) {
+                used: ratio.map { $0 * 100 }, reset: ProviderParsing.date(gxu?["windowRefreshesAt"])) {
                 if !windows.contains(where: { $0.kind == window.kind }) { windows.append(window) }
-            } else { notices.append(QuotaDiscovery.notice(type)) }
+            } else { details.append(QuotaDiscovery.notice(type)) }
+        }
+        if !sawOveragePoolCredits, usage["useOverageAiCredits"] as? Bool == false {
+            details.append(ProviderUsageDetail(
+                id: "gemini.overage.credits",
+                title: "Additional Credits",
+                value: "Off"
+            ))
         }
         guard !windows.isEmpty else {
             throw ProviderFailure(.invalidResponse, "This Google account reports no Gemini web usage windows.")
         }
         // Only this tier's meaning is verified; do not invent a plan for unknown enums.
         let plan = usage["subscriptionTier"] as? String == "TIER1" ? "Google AI Pro" : nil
-        return ProviderSnapshot(provider: .gemini, planName: plan, windows: windows, fetchedAt: now, credentialSource: sourceLabel, usageDetails: notices)
+        return ProviderSnapshot(
+            provider: .gemini,
+            planName: plan,
+            windows: windows,
+            fetchedAt: now,
+            credentialSource: sourceLabel,
+            usageDetails: details,
+            diagnosticWarnings: ResponseSchemaWatch.deduplicated(warnings)
+        )
     }
     static var changedResponse: ProviderFailure {
         ProviderFailure(.invalidResponse, "Gemini web usage response changed. Update AI Usage.")

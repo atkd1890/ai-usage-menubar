@@ -41,13 +41,30 @@ actor MuseProvider: UsageProvider {
         guard let sessionCookie = cookie.components(separatedBy: "; ").first(where: { $0.hasPrefix("hatch_sess=") && $0.count > "hatch_sess=".count }) else {
             throw ProviderFailure(.authentication, "Sign in to Muse in \(sourceLabel).")
         }
+        var extraWarnings: [ProviderDiagnosticWarning] = []
         var response = try await subscription(cookie: cookie, action: action)
         if response.statusCode == 404 || response.header("x-nextjs-action-not-found") == "1" {
             action = try await discover(cookie: cookie)
             response = try await subscription(cookie: cookie, action: action)
         }
+        if action != Self.verifiedAction,
+           let notice = ResponseSchemaWatch.confirmedNotice(
+               id: "api.version.muse.action",
+               provider: .muse,
+               endpoint: "Muse",
+               summary: "Muse Next-Action hash rotated",
+               detail: "Using rediscovered Next-Action \(action) instead of hardcoded verifiedAction.",
+               signature: "api.version.muse.action|\(action)"
+           ) {
+            extraWarnings.append(notice)
+        }
         let fingerprint = Data(SHA256.hash(data: Data(sessionCookie.utf8))).map { String(format: "%02x", $0) }.joined()
-        let value = try Self.map(response, historyID: "muse-session:" + fingerprint, credentialSource: sourceLabel)
+        let value = try Self.map(
+            response,
+            historyID: "muse-session:" + fingerprint,
+            credentialSource: sourceLabel,
+            extraWarnings: extraWarnings
+        )
         saveAction(action)
         return value
     }
@@ -108,7 +125,13 @@ actor MuseProvider: UsageProvider {
         return String(text[range])
     }
     static var changed: ProviderFailure { ProviderFailure(.invalidResponse, "Muse subscription API changed. Refresh to retry compatibility discovery.") }
-    static func map(_ response: HTTPResponse, historyID: String, credentialSource: String = "Edge Default", now: Date = Date()) throws -> ProviderSnapshot {
+    static func map(
+        _ response: HTTPResponse,
+        historyID: String,
+        credentialSource: String = "Edge Default",
+        now: Date = Date(),
+        extraWarnings: [ProviderDiagnosticWarning] = []
+    ) throws -> ProviderSnapshot {
         if [401, 403].contains(response.statusCode) || (300..<400).contains(response.statusCode) {
             throw ProviderFailure(.authentication, "Muse session expired. Sign in to Muse in \(credentialSource).")
         }
@@ -123,6 +146,44 @@ actor MuseProvider: UsageProvider {
         }
         guard matches.count == 1, let sub = matches.first, let usage = sub["usage"] as? [String: Any],
               let used = QuotaDiscovery.number(usage["percentUsed"]), (0...100).contains(used) else { throw changed }
+        var warnings = extraWarnings
+        warnings += ResponseSchemaWatch.httpHeaders(response, provider: .muse, endpoint: "Muse")
+        warnings += ResponseSchemaWatch.jsonBodyDeprecation(sub, provider: .muse, endpoint: "Muse")
+        warnings += ResponseSchemaWatch.confirmedJSONKeys(
+            in: sub,
+            provider: .muse,
+            endpoint: "Muse subscription"
+        )
+        warnings += ResponseSchemaWatch.confirmedJSONKeys(
+            in: usage,
+            provider: .muse,
+            endpoint: "Muse usage"
+        )
+        if let tierObj = sub["tier"] as? [String: Any] {
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(
+                in: tierObj,
+                provider: .muse,
+                endpoint: "Muse tier"
+            )
+        }
+        if let subscriptionType = ProviderParsing.string(sub["subscriptionType"]),
+           let enumWarning = ResponseSchemaWatch.confirmedEnum(
+               subscriptionType,
+               provider: .muse,
+               endpoint: "Muse subscription",
+               field: "subscriptionType"
+           ) {
+            warnings.append(enumWarning)
+        }
+        if let usageState = ProviderParsing.string(usage["state"]),
+           let enumWarning = ResponseSchemaWatch.confirmedEnum(
+               usageState,
+               provider: .muse,
+               endpoint: "Muse usage",
+               field: "state"
+           ) {
+            warnings.append(enumWarning)
+        }
         let rawTier = (sub["tier"] as? [String: Any])?["name"] as? String
         let cleanedTier = rawTier?
             .replacingOccurrences(of: "muse", with: "", options: .caseInsensitive)
@@ -138,6 +199,7 @@ actor MuseProvider: UsageProvider {
         return ProviderSnapshot(provider: .muse, planName: tier, windows: [QuotaWindow(kind: .weekly, usedPercent: used,
             resetsAt: ProviderParsing.date(usage["resetsAt"]))], billingUsage: billing, fetchedAt: now,
             credentialSource: credentialSource, accountLabel: historyID, usageScope: "Product usage • Muse",
-            prepaidBalance: balance, additionalUsageEnabled: billing != nil)
+            prepaidBalance: balance, additionalUsageEnabled: billing != nil,
+            diagnosticWarnings: ResponseSchemaWatch.deduplicated(warnings))
     }
 }

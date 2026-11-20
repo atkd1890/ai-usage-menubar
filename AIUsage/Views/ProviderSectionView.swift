@@ -216,6 +216,19 @@ struct ProviderSectionView: View {
             )
             .layoutPriority(1)
 
+            let _ = ConfirmedSchemaObserver.shared.revision
+            let activeWarnings = state.snapshot.map { ConfirmedSchemaStore.shared.activeWarnings(for: $0) } ?? []
+            if !embedded, !activeWarnings.isEmpty {
+                DiagnosticWarningBadge(
+                    providerName: state.snapshot?.displayName ?? state.provider.displayName,
+                    warnings: activeWarnings,
+                    onUpdate: {
+                        ConfirmedSchemaStore.shared.confirm(warnings: activeWarnings, for: state.provider)
+                        ConfirmedSchemaObserver.shared.notifyChanged()
+                    }
+                )
+            }
+
             Spacer(minLength: 8)
 
             if !embedded, let email = state.snapshot?.identityEmail {
@@ -563,9 +576,11 @@ private struct AdditionalCreditsRow: View {
     private var segments: [(label: String, number: String)] {
         let raw = detail.value.components(separatedBy: " · ")
         let parsed: [(label: String, number: String)] = raw.compactMap { segment in
-            let parts = segment.split(separator: " ", maxSplits: 1).map(String.init)
-            guard parts.count == 2, parts[1].first?.isNumber == true else { return nil }
-            return (label: parts[0], number: parts[1])
+            guard let space = segment.range(of: " ", options: .backwards) else { return nil }
+            let label = String(segment[..<space.lowerBound])
+            let number = String(segment[space.upperBound...])
+            guard label.first?.isLetter == true, !label.contains("/"), number.first?.isNumber == true else { return nil }
+            return (label: label, number: number)
         }
         return parsed.count == raw.count ? parsed : []
     }
@@ -1203,6 +1218,100 @@ private struct ProviderDisclosureTitle: View {
             .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
         } else {
             Text(title).font(.headline.weight(.semibold))
+        }
+    }
+}
+
+private struct DiagnosticWarningBadge: View {
+    let providerName: String
+    let warnings: [ProviderDiagnosticWarning]
+    let onUpdate: () -> Void
+
+    @State private var showingPopover = false
+
+    private var tooltipSummary: String {
+        warnings.map { warning in
+            guard !warning.detail.isEmpty else { return warning.summary }
+            let preview = warning.detail.replacingOccurrences(of: "\n", with: ", ")
+            return "\(warning.summary) — \(preview)"
+        }.joined(separator: "\n") + "\nClick for details or to update confirmed config."
+    }
+
+    private var needsScroll: Bool {
+        warnings.count > 3 || warnings.reduce(0) { $0 + $1.detail.split(separator: "\n").count + 2 } > 10
+    }
+
+    var body: some View {
+        Button {
+            showingPopover.toggle()
+        } label: {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(Color(nsColor: .systemYellow))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(tooltipSummary)
+        .accessibilityLabel("\(providerName) API warning")
+        .accessibilityValue(warnings.map(\.summary).joined(separator: "; "))
+        .popover(isPresented: $showingPopover, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("\(providerName) API Notice", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color(nsColor: .systemYellow))
+
+                if needsScroll {
+                    ScrollView {
+                        warningsList
+                    }
+                    .frame(maxHeight: 260)
+                } else {
+                    warningsList
+                }
+
+                Divider()
+
+                HStack(spacing: 8) {
+                    Text("Accept current API structure?")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 8)
+                    Button("Update") {
+                        onUpdate()
+                        showingPopover = false
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .help("Save these API changes into \(providerName)'s confirmed config until the next change.")
+                }
+            }
+            .padding(12)
+            .frame(width: 340, alignment: .leading)
+        }
+    }
+
+    private var warningsList: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(warnings) { warning in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(warning.kind.badgeTitle)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text(warning.summary)
+                        .font(.caption.weight(.medium))
+                        .fixedSize(horizontal: false, vertical: true)
+                    if !warning.detail.isEmpty {
+                        Text(warning.detail)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
+                }
+                if warning.id != warnings.last?.id {
+                    Divider()
+                }
+            }
         }
     }
 }

@@ -6,6 +6,14 @@ struct ClaudeResetGrants: Equatable, Sendable {
         let id: String
         let resetsLeft: Int
         let endsAt: Date?
+        let usableNow: Bool?
+
+        init(id: String, resetsLeft: Int, endsAt: Date?, usableNow: Bool? = nil) {
+            self.id = id
+            self.resetsLeft = resetsLeft
+            self.endsAt = endsAt
+            self.usableNow = usableNow
+        }
     }
 
     let grants: [Grant]
@@ -35,7 +43,8 @@ struct ClaudeResetGrants: Equatable, Sendable {
             grants.append(Grant(
                 id: id,
                 resetsLeft: max(0, Int(resetsLeft.rounded(.down))),
-                endsAt: ProviderParsing.date(grant["ends_at"])
+                endsAt: ProviderParsing.date(grant["ends_at"]),
+                usableNow: grant["usable_now"] as? Bool
             ))
         }
         return ClaudeResetGrants(grants: grants)
@@ -43,6 +52,8 @@ struct ClaudeResetGrants: Equatable, Sendable {
 
     func resets(at now: Date) -> UsageResets {
         var count = 0
+        var usableCount = 0
+        var sawUsableFlag = false
         var expirations: [Date] = []
         for grant in grants where grant.resetsLeft > 0 {
             if let endsAt = grant.endsAt, endsAt <= now { continue }
@@ -50,8 +61,18 @@ struct ClaudeResetGrants: Equatable, Sendable {
             if let endsAt = grant.endsAt {
                 expirations += Array(repeating: endsAt, count: grant.resetsLeft)
             }
+            if let usableNow = grant.usableNow {
+                sawUsableFlag = true
+                if usableNow {
+                    usableCount += grant.resetsLeft
+                }
+            }
         }
-        return UsageResets(availableCount: count, expirations: expirations)
+        return UsageResets(
+            availableCount: count,
+            expirations: expirations,
+            usableCount: sawUsableFlag ? usableCount : nil
+        )
     }
 }
 
@@ -99,6 +120,8 @@ enum ClaudeUsageMapper {
             } else { notices.append(QuotaDiscovery.notice(id)) }
         }
 
+        let warnings = schemaWarnings(in: body, response: response)
+
         let spend = ProviderParsing.object(body["spend"])
         let enabled = spend?["enabled"] as? Bool ?? ProviderParsing.object(body["extra_usage"])?["is_enabled"] as? Bool
         return ProviderSnapshot(
@@ -112,8 +135,46 @@ enum ClaudeUsageMapper {
             usageDetails: notices,
             prepaidBalance: money(spend?["balance"]),
             additionalUsageEnabled: enabled,
-            usageBreakdown: consumptionBreakdown(body, now: now)
+            usageBreakdown: consumptionBreakdown(body, now: now),
+            diagnosticWarnings: warnings
         )
+    }
+
+    private static func schemaWarnings(
+        in body: [String: Any],
+        response: HTTPResponse
+    ) -> [ProviderDiagnosticWarning] {
+        var warnings = ResponseSchemaWatch.httpHeaders(response, provider: .claude, endpoint: "Claude")
+        warnings += ResponseSchemaWatch.jsonBodyDeprecation(body, provider: .claude, endpoint: "Claude")
+        warnings += ResponseSchemaWatch.confirmedJSONKeys(in: body, provider: .claude, endpoint: "Claude")
+
+        for key in body.keys.sorted() where ["five_hour", "seven_day", "seven_day_sonnet"].contains(key) || key.hasPrefix("seven_day_") && key != "seven_day_breakdown" {
+            if let window = ProviderParsing.object(body[key]) {
+                warnings += ResponseSchemaWatch.confirmedJSONKeys(in: window, provider: .claude, endpoint: "Claude window")
+            }
+        }
+        if let extraUsage = ProviderParsing.object(body["extra_usage"]) {
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(in: extraUsage, provider: .claude, endpoint: "Claude extra_usage")
+        }
+        if let spend = ProviderParsing.object(body["spend"]) {
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(in: spend, provider: .claude, endpoint: "Claude spend")
+        }
+        if let cedar = ProviderParsing.object(body["cedar_ember"]) {
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(in: cedar, provider: .claude, endpoint: "Claude cedar_ember")
+            for grant in ProviderParsing.array(cedar["grants"]) {
+                warnings += ResponseSchemaWatch.confirmedJSONKeys(in: grant, provider: .claude, endpoint: "Claude cedar_ember grant")
+            }
+        }
+        for limit in ProviderParsing.array(body["limits"]) {
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(in: limit, provider: .claude, endpoint: "Claude limit")
+        }
+        if let breakdown = ProviderParsing.object(body["seven_day_breakdown"]) {
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(in: breakdown, provider: .claude, endpoint: "Claude breakdown")
+            for row in ProviderParsing.array(breakdown["rows"]) {
+                warnings += ResponseSchemaWatch.confirmedJSONKeys(in: row, provider: .claude, endpoint: "Claude breakdown row")
+            }
+        }
+        return ResponseSchemaWatch.deduplicated(warnings)
     }
 
     static func consumptionBreakdown(_ body: [String: Any], now: Date) -> ConsumptionBreakdown? {

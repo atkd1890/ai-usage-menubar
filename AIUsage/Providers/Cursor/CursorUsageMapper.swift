@@ -64,6 +64,21 @@ enum CursorUsageMapper {
             )
         }
 
+        var warnings = ResponseSchemaWatch.httpHeaders(usageResponse, provider: .cursor, endpoint: "Cursor")
+        warnings += ResponseSchemaWatch.jsonBodyDeprecation(body, provider: .cursor, endpoint: "Cursor")
+        warnings += ResponseSchemaWatch.confirmedJSONKeys(in: body, provider: .cursor, endpoint: "Cursor")
+        warnings += ResponseSchemaWatch.confirmedJSONKeys(in: planUsage, provider: .cursor, endpoint: "Cursor planUsage")
+        if let spendLimitUsage = ProviderParsing.object(body["spendLimitUsage"]) {
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(in: spendLimitUsage, provider: .cursor, endpoint: "Cursor spendLimitUsage")
+        }
+        if let planResponse, (200..<300).contains(planResponse.statusCode) {
+            warnings += ResponseSchemaWatch.httpHeaders(planResponse, provider: .cursor, endpoint: "Cursor planInfo")
+            if let planBody = try? ProviderParsing.object(from: planResponse.body) {
+                warnings += ResponseSchemaWatch.jsonBodyDeprecation(planBody, provider: .cursor, endpoint: "Cursor planInfo")
+                warnings += ResponseSchemaWatch.confirmedJSONKeys(in: planBody, provider: .cursor, endpoint: "Cursor planInfo")
+            }
+        }
+
         return ProviderSnapshot(
             provider: .cursor,
             planName: planName(planResponse),
@@ -72,7 +87,8 @@ enum CursorUsageMapper {
                 ProviderParsing.object(body["spendLimitUsage"])
             ),
             fetchedAt: now,
-            additionalUsageResetsAt: reset
+            additionalUsageResetsAt: reset,
+            diagnosticWarnings: ResponseSchemaWatch.deduplicated(warnings)
         )
     }
 

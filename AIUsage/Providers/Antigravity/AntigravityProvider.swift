@@ -16,6 +16,8 @@ actor AntigravityProvider: UsageProvider {
     private struct CodeAssist {
         var plan: String?
         var project: String?
+        var creditsDetail: ProviderUsageDetail?
+        var warnings: [ProviderDiagnosticWarning] = []
         var checkedAt: Date
     }
 
@@ -113,10 +115,12 @@ actor AntigravityProvider: UsageProvider {
             now.timeIntervalSince($0.checkedAt) >= Self.codeAssistInterval
         }) ?? true {
             switch await client.loadCodeAssist(accessToken: accessToken) {
-            case let .success(data):
+            case let .success(data, headers):
                 codeAssist = CodeAssist(
                     plan: AntigravityUsageMapper.plan(data),
                     project: AntigravityUsageMapper.project(data),
+                    creditsDetail: AntigravityUsageMapper.aiCreditsDetail(data),
+                    warnings: AntigravityUsageMapper.codeAssistWarnings(data, headers: headers),
                     checkedAt: now
                 )
             case .tokenRefused:
@@ -127,6 +131,8 @@ actor AntigravityProvider: UsageProvider {
                 codeAssist = CodeAssist(
                     plan: codeAssist?.plan,
                     project: codeAssist?.project,
+                    creditsDetail: codeAssist?.creditsDetail,
+                    warnings: codeAssist?.warnings ?? [],
                     checkedAt: now
                 )
             }
@@ -141,7 +147,9 @@ actor AntigravityProvider: UsageProvider {
             guard let snapshot = AntigravityUsageMapper.summary(
                 summaries,
                 planName: codeAssist?.plan,
-                now: dateProvider.now()
+                now: dateProvider.now(),
+                extraDetails: codeAssist?.creditsDetail.map { [$0] } ?? [],
+                extraWarnings: codeAssist?.warnings ?? []
             ) else {
                 return .failure(ProviderFailure(
                     .invalidResponse,

@@ -76,7 +76,7 @@ actor AntigravityDesktopProvider: UsageProvider {
     private let client: AntigravityUsageClient
     private let now: @Sendable () -> Date
     private var access: (fingerprint: Data, token: String, expires: Date)?
-    private var metadata: (fingerprint: Data, plan: String?, project: String?, checked: Date)?
+    private var metadata: (fingerprint: Data, plan: String?, project: String?, creditsDetail: ProviderUsageDetail?, codeAssistWarnings: [ProviderDiagnosticWarning], checked: Date)?
     init(credentials: AntigravityDesktopCredentials = AntigravityDesktopCredentials(),
          client: AntigravityUsageClient = AntigravityUsageClient(http: GeminiReadOnlyHTTPClient(
             allowedHosts: ["oauth2.googleapis.com", "cloudcode-pa.googleapis.com", "daily-cloudcode-pa.googleapis.com"])),
@@ -100,7 +100,15 @@ actor AntigravityDesktopProvider: UsageProvider {
             let token = access!.token
             if metadata == nil || now().timeIntervalSince(metadata!.checked) >= 3600 {
                 switch await client.loadCodeAssist(accessToken: token) {
-                case let .success(data): metadata = (credential.fingerprint, AntigravityUsageMapper.plan(data), AntigravityUsageMapper.project(data), now())
+                case let .success(data, headers):
+                    metadata = (
+                        credential.fingerprint,
+                        AntigravityUsageMapper.plan(data),
+                        AntigravityUsageMapper.project(data),
+                        AntigravityUsageMapper.aiCreditsDetail(data),
+                        AntigravityUsageMapper.codeAssistWarnings(data, headers: headers),
+                        now()
+                    )
                 case .tokenRefused: access = nil; if attempt == 0 { continue }
                 case .denied, .unavailable: break
                 }
@@ -113,7 +121,15 @@ actor AntigravityDesktopProvider: UsageProvider {
             try Task.checkCancellation()
             switch response {
             case let .success(summaries):
-                guard let value = AntigravityUsageMapper.summary(summaries, planName: metadata?.plan, now: now()), !value.windows.isEmpty else {
+                let extraDetails = metadata?.creditsDetail.map { [$0] } ?? []
+                let extraWarnings = metadata?.codeAssistWarnings ?? []
+                guard let value = AntigravityUsageMapper.summary(
+                    summaries,
+                    planName: metadata?.plan,
+                    now: now(),
+                    extraDetails: extraDetails,
+                    extraWarnings: extraWarnings
+                ), !value.windows.isEmpty else {
                     throw ProviderFailure(.invalidResponse, "Antigravity quota response changed.")
                 }
                 return value.withCredential(source: "Antigravity app", account: credential.email ?? credential.historyID, email: credential.email)

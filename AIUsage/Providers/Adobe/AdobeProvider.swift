@@ -105,7 +105,8 @@ actor AdobeProvider: UsageProvider {
             data: balanceResponse.body,
             accessToken: accessToken,
             credentialSource: sourceLabel,
-            now: dateProvider()
+            now: dateProvider(),
+            headers: balanceResponse.headers
         )
     }
 
@@ -151,13 +152,44 @@ actor AdobeProvider: UsageProvider {
         data: Data,
         accessToken: String,
         credentialSource: String,
-        now: Date
+        now: Date,
+        headers: [String: String] = [:]
     ) throws -> ProviderSnapshot {
         let balance: AdobeBalanceResponse
         do {
             balance = try JSONDecoder().decode(AdobeBalanceResponse.self, from: data)
         } catch {
             throw ProviderFailure(.invalidResponse, "Unable to parse Adobe credit balance.")
+        }
+
+        var warnings = ResponseSchemaWatch.httpHeaders(
+            HTTPResponse(statusCode: 200, headers: headers, body: Data()),
+            provider: .adobe,
+            endpoint: "Adobe"
+        )
+        if let rawObject = try? ProviderParsing.object(from: data) {
+            warnings += ResponseSchemaWatch.jsonBodyDeprecation(rawObject, provider: .adobe, endpoint: "Adobe")
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(in: rawObject, provider: .adobe, endpoint: "Adobe")
+            if let totalObj = ProviderParsing.object(rawObject["total"]) {
+                warnings += ResponseSchemaWatch.confirmedJSONKeys(in: totalObj, provider: .adobe, endpoint: "Adobe total")
+                if let planCap = ProviderParsing.string(totalObj["planCap"]),
+                   let enumWarning = ResponseSchemaWatch.confirmedEnum(planCap, provider: .adobe, endpoint: "Adobe total", field: "planCap") {
+                    warnings.append(enumWarning)
+                }
+                if let totalQuotaObj = ProviderParsing.object(totalObj["quota"]) {
+                    warnings += ResponseSchemaWatch.confirmedJSONKeys(in: totalQuotaObj, provider: .adobe, endpoint: "Adobe quota")
+                }
+            }
+            if let rawCredits = ProviderParsing.object(rawObject["credits"]) {
+                warnings += ResponseSchemaWatch.confirmedJSONKeys(in: rawCredits, provider: .adobe, endpoint: "Adobe credits")
+                for rawCreditItem in rawCredits.values {
+                    guard let creditItem = ProviderParsing.object(rawCreditItem) else { continue }
+                    warnings += ResponseSchemaWatch.confirmedJSONKeys(in: creditItem, provider: .adobe, endpoint: "Adobe credit item")
+                    if let creditQuota = ProviderParsing.object(creditItem["quota"]) {
+                        warnings += ResponseSchemaWatch.confirmedJSONKeys(in: creditQuota, provider: .adobe, endpoint: "Adobe quota")
+                    }
+                }
+            }
         }
 
         var windows: [QuotaWindow] = []
@@ -229,7 +261,8 @@ actor AdobeProvider: UsageProvider {
             fetchedAt: now,
             credentialSource: credentialSource,
             accountLabel: email ?? "Adobe Account",
-            accountEmail: email
+            accountEmail: email,
+            diagnosticWarnings: ResponseSchemaWatch.deduplicated(warnings)
         )
     }
 

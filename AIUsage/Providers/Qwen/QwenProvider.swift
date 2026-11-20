@@ -756,6 +756,11 @@ actor QwenProvider: UsageProvider {
             throw ProviderFailure(.invalidResponse, "Qwen returned invalid agent usage data.")
         }
 
+        var warnings = ResponseSchemaWatch.httpHeaders(agentUsage, provider: .qwen, endpoint: "Qwen agent/usage")
+        warnings += ResponseSchemaWatch.jsonBodyDeprecation(root, provider: .qwen, endpoint: "Qwen agent/usage")
+        warnings += ResponseSchemaWatch.jsonBodyDeprecation(data, provider: .qwen, endpoint: "Qwen agent/usage")
+        warnings += ResponseSchemaWatch.confirmedJSONKeys(in: data, provider: .qwen, endpoint: "Qwen agent/usage")
+
         var weeklyBalance: Double?
         var weeklyTotal: Double?
         var dailyWindow: QuotaWindow?
@@ -764,13 +769,72 @@ actor QwenProvider: UsageProvider {
         var otherWindows: [QuotaWindow] = []
         var notices: [ProviderUsageDetail] = []
 
+        if let credits {
+            warnings += ResponseSchemaWatch.httpHeaders(credits, provider: .qwen, endpoint: "Qwen credits")
+        }
         if let credits,
            credits.statusCode == 200,
            let creditsRoot = try? ProviderParsing.object(from: credits.body),
            creditsRoot["success"] as? Bool == true,
            let creditsData = creditsRoot["data"] as? [String: Any],
            let entitlements = creditsData["entitlements"] as? [[String: Any]] {
+            warnings += ResponseSchemaWatch.jsonBodyDeprecation(creditsData, provider: .qwen, endpoint: "Qwen credits")
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(
+                in: creditsData,
+                provider: .qwen,
+                endpoint: "Qwen credits"
+            )
             for item in entitlements {
+                warnings += ResponseSchemaWatch.confirmedJSONKeys(
+                    in: item,
+                    provider: .qwen,
+                    endpoint: "Qwen entitlement"
+                )
+                if let frequencies = item["frequency"] as? [[String: Any]] {
+                    var parsedFrequencies: [(code: String, used: Double, resetsAt: Date?)] = []
+                    for freq in frequencies {
+                        warnings += ResponseSchemaWatch.confirmedJSONKeys(
+                            in: freq,
+                            provider: .qwen,
+                            endpoint: "Qwen frequency"
+                        )
+                        guard let freqCode = ProviderParsing.string(freq["frequencyEntitlementCode"]), !freqCode.isEmpty,
+                              let used = QuotaDiscovery.number(freq["usedPercent"]),
+                              (0...100).contains(used) else {
+                            continue
+                        }
+                        let rawReset = ProviderParsing.date(freq["refreshAt"])
+                        let resetsAt = rawReset.flatMap { $0 > now.addingTimeInterval(5) ? $0 : nil }
+                        parsedFrequencies.append((code: freqCode, used: used, resetsAt: resetsAt))
+                    }
+                    parsedFrequencies.sort { lhs, rhs in
+                        let l = frequencySortKey(lhs.code)
+                        let r = frequencySortKey(rhs.code)
+                        if l.major != r.major { return l.major > r.major }
+                        if l.minor != r.minor { return l.minor > r.minor }
+                        if l.isStable != r.isStable { return l.isStable && !r.isStable }
+                        return l.code < r.code
+                    }
+                    if let latest = parsedFrequencies.first.map({ frequencySortKey($0.code) }) {
+                        parsedFrequencies.removeAll {
+                            let key = frequencySortKey($0.code)
+                            return key.major != latest.major || key.minor != latest.minor
+                        }
+                    }
+                    for freq in parsedFrequencies {
+                        let kind = QuotaKind.additional(
+                            id: "qwen.freq." + freq.code,
+                            title: frequencyModelTitle(freq.code)
+                        )
+                        if !otherWindows.contains(where: { $0.kind == kind }) {
+                            otherWindows.append(QuotaWindow(
+                                kind: kind,
+                                usedPercent: freq.used,
+                                resetsAt: freq.resetsAt
+                            ))
+                        }
+                    }
+                }
                 guard let code = item["entitlementCode"] as? String, !code.isEmpty else { continue }
                 if code == "task_assistant" {
                     // Shares the same 7-day Agent & Qwen Code pool already reported by agent/usage.
@@ -869,22 +933,53 @@ actor QwenProvider: UsageProvider {
         windows.append(contentsOf: otherWindows)
 
         var resets: UsageResets?
-        if let resetCards,
-           resetCards.statusCode == 200,
-           let resetsRoot = try? ProviderParsing.object(from: resetCards.body),
-           resetsRoot["success"] as? Bool == true,
-           let resetsData = resetsRoot["data"] as? [String: Any],
-           let coupons = resetsData["coupons"] as? [[String: Any]],
-           !coupons.isEmpty {
-            let expirations = coupons.compactMap {
-                ProviderParsing.date($0["gmtExpire"] ?? $0["expireAt"] ?? $0["expiresAt"])
-            }
-            let active = UsageResets(availableCount: coupons.count, expirations: expirations).active(at: now)
-            if active.availableCount > 0 {
-                resets = active
+        if let resetCards {
+            warnings += ResponseSchemaWatch.httpHeaders(resetCards, provider: .qwen, endpoint: "Qwen resets")
+            if resetCards.statusCode == 200,
+               let resetsRoot = try? ProviderParsing.object(from: resetCards.body),
+               resetsRoot["success"] as? Bool == true,
+               let resetsData = resetsRoot["data"] as? [String: Any] {
+                warnings += ResponseSchemaWatch.jsonBodyDeprecation(resetsData, provider: .qwen, endpoint: "Qwen resets")
+                warnings += ResponseSchemaWatch.confirmedJSONKeys(in: resetsData, provider: .qwen, endpoint: "Qwen resets")
+                if let coupons = resetsData["coupons"] as? [[String: Any]], !coupons.isEmpty {
+                    let expirations = coupons.compactMap {
+                        ProviderParsing.date($0["gmtExpire"] ?? $0["expireAt"] ?? $0["expiresAt"])
+                    }
+                    let active = UsageResets(availableCount: coupons.count, expirations: expirations).active(at: now)
+                    if active.availableCount > 0 {
+                        resets = active
+                    }
+                }
             }
         }
 
+        if let memberLevel {
+            warnings += ResponseSchemaWatch.httpHeaders(memberLevel, provider: .qwen, endpoint: "Qwen member")
+            if memberLevel.statusCode == 200,
+               let memberRoot = try? ProviderParsing.object(from: memberLevel.body),
+               memberRoot["success"] as? Bool == true,
+               let memberData = memberRoot["data"] as? [String: Any] {
+                warnings += ResponseSchemaWatch.jsonBodyDeprecation(memberData, provider: .qwen, endpoint: "Qwen member")
+                warnings += ResponseSchemaWatch.confirmedJSONKeys(in: memberData, provider: .qwen, endpoint: "Qwen member")
+                if let memberType = ProviderParsing.string(memberData["memberType"]),
+                   let enumWarning = ResponseSchemaWatch.confirmedEnum(
+                       memberType,
+                       provider: .qwen,
+                       endpoint: "Qwen member",
+                       field: "memberType"
+                   ) {
+                    warnings.append(enumWarning)
+                }
+            }
+        } else if let memberType = ProviderParsing.string(data["memberType"]),
+                  let enumWarning = ResponseSchemaWatch.confirmedEnum(
+                      memberType,
+                      provider: .qwen,
+                      endpoint: "Qwen member",
+                      field: "memberType"
+                  ) {
+            warnings.append(enumWarning)
+        }
         let planName = resolvePlanName(memberLevel: memberLevel, agentUsageData: data)
 
         return ProviderSnapshot(
@@ -897,8 +992,63 @@ actor QwenProvider: UsageProvider {
             accountLabel: email ?? historyID,
             accountEmail: email,
             usageScope: "Shared account limits • Chat, Agent & Qwen Code",
-            usageDetails: notices
+            usageDetails: notices,
+            diagnosticWarnings: ResponseSchemaWatch.deduplicated(warnings)
         )
+    }
+
+    static func frequencyModelTitle(_ code: String) -> String {
+        let rawTokens = frequencyCodeTokens(code)
+        let hasVersionToken = rawTokens.contains { $0.first?.isNumber == true }
+        let filteredTokens = hasVersionToken
+            ? rawTokens.filter { $0.lowercased() != "max" }
+            : rawTokens
+        return filteredTokens.map { token in
+            if token.first?.isNumber == true {
+                return normalizedVersionToken(token)
+            }
+            return token.prefix(1).uppercased() + token.dropFirst().lowercased()
+        }.joined(separator: " ")
+    }
+
+    static func frequencySortKey(_ code: String) -> (major: Int, minor: Int, isStable: Bool, code: String) {
+        let tokens = frequencyCodeTokens(code)
+        var major = 0
+        var minor = 0
+        for token in tokens where token.first?.isNumber == true {
+            let parts = token.split(separator: ".")
+            if let first = parts.first, let parsedMajor = Int(first) {
+                major = parsedMajor
+                minor = parts.count > 1 ? (Int(parts[1]) ?? 0) : 0
+                break
+            }
+        }
+        let isStable = !tokens.contains { $0.lowercased() == "preview" }
+        return (major: major, minor: minor, isStable: isStable, code: code.lowercased())
+    }
+
+    private static func frequencyCodeTokens(_ code: String) -> [String] {
+        code
+            .replacingOccurrences(of: "_", with: "-")
+            .split(separator: "-")
+            .flatMap { rawPart -> [String] in
+                let part = String(rawPart)
+                if part.lowercased().hasPrefix("qwen"),
+                   part.count > 4,
+                   let next = part.dropFirst(4).first,
+                   next.isNumber {
+                    return ["Qwen", String(part.dropFirst(4))]
+                }
+                return [part]
+            }
+    }
+
+    private static func normalizedVersionToken(_ token: String) -> String {
+        let parts = token.split(separator: ".", omittingEmptySubsequences: false)
+        if parts.count == 2, parts[1].allSatisfy({ $0 == "0" }), !parts[1].isEmpty {
+            return String(parts[0])
+        }
+        return token
     }
 
     private static func quotaKind(for code: String) -> QuotaKind {

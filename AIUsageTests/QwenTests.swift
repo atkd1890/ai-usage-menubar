@@ -445,4 +445,62 @@ final class QwenTests: XCTestCase {
         XCTAssertEqual(snapshot.windows[0].inactiveDetail, "Not on plan")
         XCTAssertEqual(snapshot.availableMenuBarItems.map(\.metric), [.weekly])
     }
+
+    @MainActor
+    func testFrequencyModelDailyLimitsRenderCleanTitlesAndConditionalReset() throws {
+        let futureMs = Int64((now.addingTimeInterval(3_600).timeIntervalSince1970 * 1000).rounded())
+        let nowMs = Int64((now.timeIntervalSince1970 * 1000).rounded())
+        let creditsWithFrequency = httpResponse(json: """
+        {
+          "httpCode": 200,
+          "success": true,
+          "data": {
+            "creditsRemain": true,
+            "scopes": [],
+            "entitlements": [
+              {
+                "entitlementCode": "model_shared_usage",
+                "balance": 150,
+                "total": 200,
+                "expireAt": 1794913223000,
+                "frequency": [
+                  {"frequencyEntitlementCode": "qwen3.8-max", "refreshAt": \(futureMs), "scope": "DAILY", "usedPercent": 25},
+                  {"frequencyEntitlementCode": "qwen4.0-max-preview", "refreshAt": \(nowMs), "scope": "DAILY", "usedPercent": 0},
+                  {"frequencyEntitlementCode": "qwen4-max", "refreshAt": \(futureMs), "scope": "DAILY", "usedPercent": 10}
+                ]
+              },
+              {"entitlementCode": "daily_credits", "balance": 20, "total": 40, "expireAt": 1794913223000, "frequency": []},
+              {"entitlementCode": "image_generation", "balance": 8, "total": 10, "expireAt": 1794913223000, "frequency": []},
+              {"entitlementCode": "task_assistant", "balance": 3000, "total": 6000, "expireAt": 1795431623000, "frequency": []}
+            ]
+          }
+        }
+        """)
+
+        let snapshot = try QwenProvider.map(
+            agentUsage: agentUsageOK,
+            credits: creditsWithFrequency,
+            resetCards: resetCardsOK,
+            memberLevel: httpResponse(json: #"{"success":true,"data":{"memberType":"free","memberName":"Free"}}"#),
+            now: now
+        )
+
+        XCTAssertTrue(snapshot.allDiagnosticWarnings.isEmpty)
+        XCTAssertEqual(ProviderDetailsLayout.summaryWindows(snapshot).map(\.kind), [.daily, .weekly])
+        let freqWindows = snapshot.windows.filter { $0.kind.rawValue.hasPrefix("additional:qwen.freq.") }
+        XCTAssertEqual(freqWindows.map(\.kind.title), ["Qwen 4", "Qwen 4 Preview"])
+        XCTAssertEqual(freqWindows.map(\.usedPercent), [10, 0])
+        XCTAssertNotNil(freqWindows[0].resetsAt)
+        XCTAssertNil(freqWindows[1].resetsAt)
+        let detailRows = ProviderDetailsLayout.rows(ProviderDetailsLayout.detailWindows(snapshot))
+        XCTAssertEqual(
+            detailRows.map { $0.map(\.kind.title) },
+            [
+                ["Video Credits", "Image Generation"],
+                ["Qwen 4", "Qwen 4 Preview"]
+            ]
+        )
+        XCTAssertEqual(QwenProvider.frequencyModelTitle("qwen-max"), "Qwen Max")
+        XCTAssertEqual(QwenProvider.frequencyModelTitle("qwen3.5-plus"), "Qwen 3.5 Plus")
+    }
 }

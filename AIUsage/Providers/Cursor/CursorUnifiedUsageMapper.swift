@@ -47,6 +47,27 @@ enum CursorUnifiedUsageMapper {
                 products = parsed.sorted { $0.usedCents > $1.usedCents }
             }
         }
+        var warnings = legacy.diagnosticWarnings
+        if let dashboard {
+            warnings += ResponseSchemaWatch.httpHeaders(dashboard, provider: .cursor, endpoint: "X Subscription")
+        }
+        if let shared {
+            warnings += ResponseSchemaWatch.httpHeaders(shared, provider: .cursor, endpoint: "X Subscription")
+        }
+        if let status {
+            warnings += ResponseSchemaWatch.jsonBodyDeprecation(status, provider: .cursor, endpoint: "X Subscription")
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(in: status, provider: .cursor, endpoint: "X Subscription")
+            if let weeklyObj = ProviderParsing.object(status["weeklyIncludedUsage"]) {
+                warnings += ResponseSchemaWatch.confirmedJSONKeys(in: weeklyObj, provider: .cursor, endpoint: "X Subscription weeklyIncludedUsage")
+            }
+            if let monthlyObj = ProviderParsing.object(status["monthlyUsage"]) {
+                warnings += ResponseSchemaWatch.confirmedJSONKeys(in: monthlyObj, provider: .cursor, endpoint: "X Subscription monthlyUsage")
+            }
+        }
+        if let sand {
+            warnings += ResponseSchemaWatch.jsonBodyDeprecation(sand, provider: .cursor, endpoint: "X Subscription sand")
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(in: sand, provider: .cursor, endpoint: "X Subscription sand")
+        }
         var billing: BillingUsage?
         var billingReset: Date?
         var billingEnabled: Bool?
@@ -64,6 +85,7 @@ enum CursorUnifiedUsageMapper {
                 prepaidDollars: number(sand?["prepaidAvailableCents"]).map { $0 / 100 },
                 additionalUsageResetsAt: billingReset, additionalUsageEnabled: billingEnabled,
                 additionalUsageUnavailable: billing == nil),
-            credentialSource: "Shared Cursor & Grok usage · Cursor app")
+            credentialSource: "Shared Cursor & Grok usage · Cursor app",
+            diagnosticWarnings: ResponseSchemaWatch.deduplicated(warnings))
     }
 }

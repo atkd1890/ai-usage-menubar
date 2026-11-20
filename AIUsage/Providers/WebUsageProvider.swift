@@ -127,7 +127,7 @@ actor WebUsageProvider: UsageProvider {
             else {
                 if let response = try? await request(CodexUsageClient.resetCreditsURL.absoluteString,
                                                      cookie: cookie, token: token, account: account), response.statusCode == 200 {
-                    resetList = CodexResetCreditList.parse(response.body)
+                    resetList = CodexResetCreditList.parse(response.body, headers: response.headers)
                 }
                 resetCache = (fingerprint, account, now, resetList)
             }
@@ -195,6 +195,7 @@ extension ProviderSnapshot {
              additionalUsageEnabled: additionalUsageEnabled,
              additionalUsageResetsAt: additionalUsageResetsAt,
              usageBreakdown: usageBreakdown,
-             quotaSections: quotaSections)
+             quotaSections: quotaSections,
+             diagnosticWarnings: diagnosticWarnings)
     }
 }

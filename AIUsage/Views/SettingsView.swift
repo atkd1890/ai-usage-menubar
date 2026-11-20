@@ -328,12 +328,17 @@ private struct ProviderSettingsRow: View {
     }
 
     private var connectionStatus: some View {
+        let _ = ConfirmedSchemaObserver.shared.revision
         let states = connectionStates ?? [state].compactMap { $0 }
+        let activeWarnings: (ProviderState) -> [ProviderDiagnosticWarning] = { state in
+            guard let snapshot = state.snapshot else { return [] }
+            return ConfirmedSchemaStore.shared.activeWarnings(for: snapshot)
+        }
         let status = states.first(where: { $0.isRefreshing })
             ?? states.first(where: { $0.failure != nil || $0.snapshot == nil })
-            ?? states.first(where: { !($0.snapshot?.quotaCompatibilityNotes.isEmpty ?? true) })
+            ?? states.first(where: { !activeWarnings($0).isEmpty })
             ?? states.first
-        let notes = status?.snapshot?.quotaCompatibilityNotes.map(\.value).joined(separator: " · ") ?? ""
+        let notes = status.map { activeWarnings($0).map(\.summary).joined(separator: "\n") } ?? ""
         return ProviderStatusView(state: status)
             .help(status?.failure?.message ?? (notes.isEmpty ? "Usage loaded successfully using the selected login method." : notes))
     }
@@ -640,6 +645,7 @@ private struct ProviderStatusView: View {
     let state: ProviderState?
 
     var body: some View {
+        let _ = ConfirmedSchemaObserver.shared.revision
         let presentation = ProviderStatusPresentation(state: state)
 
         Label(presentation.text, systemImage: presentation.systemImage)
@@ -697,10 +703,13 @@ private struct ProviderStatusPresentation {
             return
         }
 
-        if let snapshot = state.snapshot, !snapshot.quotaCompatibilityNotes.isEmpty {
-            text = "Connected · Partial data"
+        if let snapshot = state.snapshot,
+           case let activeWarnings = ConfirmedSchemaStore.shared.activeWarnings(for: snapshot),
+           !activeWarnings.isEmpty {
+            let onlyCompatibility = activeWarnings.allSatisfy { $0.kind == .partialCompatibility }
+            text = onlyCompatibility ? "Connected · Partial data" : "Connected · API changed"
             systemImage = "exclamationmark.triangle"
-            color = .orange
+            color = .yellow
         } else if state.snapshot != nil {
             text = "Connected"
             systemImage = "checkmark.circle.fill"

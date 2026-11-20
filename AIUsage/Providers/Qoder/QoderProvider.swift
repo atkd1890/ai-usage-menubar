@@ -470,6 +470,26 @@ actor QoderProvider: UsageProvider {
         let displayMode = ProviderParsing.string(root["displayMode"])
         let planFromEndpoint = extractPlanTier(from: plan)
 
+        var warnings = ResponseSchemaWatch.httpHeaders(usage, provider: .qoder, endpoint: "Qoder")
+        warnings += ResponseSchemaWatch.jsonBodyDeprecation(root, provider: .qoder, endpoint: "Qoder")
+        warnings += ResponseSchemaWatch.confirmedJSONKeys(in: root, provider: .qoder, endpoint: "Qoder")
+        if let displayMode,
+           let enumWarning = ResponseSchemaWatch.confirmedEnum(
+               displayMode,
+               provider: .qoder,
+               endpoint: "Qoder",
+               field: "displayMode"
+           ) {
+            warnings.append(enumWarning)
+        }
+        if let plan {
+            warnings += ResponseSchemaWatch.httpHeaders(plan, provider: .qoder, endpoint: "Qoder plan")
+            if plan.statusCode == 200, let planObj = try? ProviderParsing.object(from: plan.body) {
+                warnings += ResponseSchemaWatch.jsonBodyDeprecation(planObj, provider: .qoder, endpoint: "Qoder plan")
+                warnings += ResponseSchemaWatch.confirmedJSONKeys(in: planObj, provider: .qoder, endpoint: "Qoder plan")
+            }
+        }
+
         if displayMode == "enterprise" {
             return ProviderSnapshot(
                 provider: .qoder,
@@ -485,7 +505,8 @@ actor QoderProvider: UsageProvider {
                         title: "Usage",
                         value: "Managed by organization"
                     )
-                ]
+                ],
+                diagnosticWarnings: ResponseSchemaWatch.deduplicated(warnings)
             )
         }
 
@@ -494,19 +515,44 @@ actor QoderProvider: UsageProvider {
             throw ProviderFailure(.invalidResponse, "Qoder returned an unsupported usage payload.")
         }
 
+        warnings += ResponseSchemaWatch.jsonBodyDeprecation(qoderUsage, provider: .qoder, endpoint: "Qoder usage")
+        warnings += ResponseSchemaWatch.confirmedJSONKeys(in: qoderUsage, provider: .qoder, endpoint: "Qoder usage")
+        if let usageType = ProviderParsing.string(qoderUsage["usageType"]),
+           let enumWarning = ResponseSchemaWatch.confirmedEnum(
+               usageType,
+               provider: .qoder,
+               endpoint: "Qoder usage",
+               field: "usageType"
+           ) {
+            warnings.append(enumWarning)
+        }
+        if let userType = ProviderParsing.string(qoderUsage["userType"]),
+           let enumWarning = ResponseSchemaWatch.confirmedEnum(
+               userType,
+               provider: .qoder,
+               endpoint: "Qoder usage",
+               field: "userType"
+           ) {
+            warnings.append(enumWarning)
+        }
+
         let resetsAt = ProviderParsing.date(qoderUsage["refreshAt"] ?? qoderUsage["expiresAt"])
         var windows: [QuotaWindow] = []
         var details: [ProviderUsageDetail] = []
 
-        if let userQuota = ProviderParsing.object(qoderUsage["userQuota"]),
-           let window = mapQuotaWindow(userQuota, kind: .weekly, resetsAt: resetsAt) {
-            windows.append(window)
+        if let userQuota = ProviderParsing.object(qoderUsage["userQuota"]) {
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(in: userQuota, provider: .qoder, endpoint: "Qoder quota")
+            if let window = mapQuotaWindow(userQuota, kind: .weekly, resetsAt: resetsAt) {
+                windows.append(window)
+            }
         }
         var hasAddOnCredits = false
-        if let addOnQuota = ProviderParsing.object(qoderUsage["addOnQuota"]),
-           let detail = mapAddOnCredits(addOnQuota) {
-            details.append(detail)
-            hasAddOnCredits = true
+        if let addOnQuota = ProviderParsing.object(qoderUsage["addOnQuota"]) {
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(in: addOnQuota, provider: .qoder, endpoint: "Qoder quota")
+            if let detail = mapAddOnCredits(addOnQuota) {
+                details.append(detail)
+                hasAddOnCredits = true
+            }
         }
         if let orgPackage = ProviderParsing.object(qoderUsage["orgResourcePackage"]),
            let detail = mapOrgResourcePackage(orgPackage) {
@@ -536,7 +582,8 @@ actor QoderProvider: UsageProvider {
             credentialSource: credentialSource,
             accountLabel: email ?? resolvedHistoryID,
             accountEmail: email,
-            usageDetails: details
+            usageDetails: details,
+            diagnosticWarnings: ResponseSchemaWatch.deduplicated(warnings)
         )
     }
 

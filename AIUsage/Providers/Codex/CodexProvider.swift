@@ -167,7 +167,7 @@ actor CodexProvider: UsageProvider {
             accessToken: accessToken,
             accountID: accountID
         ), (200..<300).contains(response.statusCode) {
-            list = CodexResetCreditList.parse(response.body)
+            list = CodexResetCreditList.parse(response.body, headers: response.headers)
         }
         let previous = resetCreditListRead?.accountID == accountID
             ? resetCreditListRead?.list

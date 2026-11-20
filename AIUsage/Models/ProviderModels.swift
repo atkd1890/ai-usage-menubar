@@ -306,7 +306,7 @@ enum QuotaKind: RawRepresentable, Codable, Hashable, Sendable {
         case .completions: "Completions"
         case .claudePool: "3rd-party"
         case .claudePoolWeekly: "3rd-party Weekly"
-        case .argonWeekly: "Argon Weekly"
+        case .argonWeekly: "Argon"
         case .firefly: "Firefly"
         case .additional(_, let title): title
         }
@@ -453,7 +453,7 @@ enum MenuBarMetricID: RawRepresentable, CaseIterable, Codable, Hashable, Identif
         case .completions: "Completions"
         case .claudePool: "3rd-party"
         case .claudePoolWeekly: "3rd-party Weekly"
-        case .argonWeekly: "Argon Weekly"
+        case .argonWeekly: "Argon"
         case .additional(_, let title): title
         case .extraUsage: "Extra Usage"
         case .credits: "Credits"
@@ -861,6 +861,7 @@ struct ProviderSnapshot: Equatable, Sendable {
     let additionalUsageResetsAt: Date?
     let usageBreakdown: ConsumptionBreakdown?
     let quotaSections: [ProviderQuotaSection]
+    let diagnosticWarnings: [ProviderDiagnosticWarning]
 
     var identityEmail: String? {
         accountEmail ?? ([ProviderID.gemini, .antigravity].contains(provider) ? AccountEmail.validated(accountLabel) : nil)
@@ -916,6 +917,19 @@ struct ProviderSnapshot: Equatable, Sendable {
         if case .flexCreditBalance = billingUsage { return true }
         return false
     }
+    var allDiagnosticWarnings: [ProviderDiagnosticWarning] {
+        let compatibility = quotaCompatibilityNotes.map { note in
+            ProviderDiagnosticWarning(
+                id: note.id,
+                kind: .partialCompatibility,
+                summary: note.value,
+                detail: "The provider returned a quota entry whose format is not yet supported.",
+                patch: .acknowledgeNotice(endpoint: "compatibility", signature: "\(note.id)|\(note.value)")
+            )
+        }
+        return ResponseSchemaWatch.deduplicated(diagnosticWarnings + compatibility)
+    }
+    var hasDiagnosticWarnings: Bool { !allDiagnosticWarnings.isEmpty }
 
     init(
         provider: ProviderID,
@@ -934,7 +948,8 @@ struct ProviderSnapshot: Equatable, Sendable {
         additionalUsageEnabled: Bool? = nil,
         additionalUsageResetsAt: Date? = nil,
         usageBreakdown: ConsumptionBreakdown? = nil,
-        quotaSections: [ProviderQuotaSection] = []
+        quotaSections: [ProviderQuotaSection] = [],
+        diagnosticWarnings: [ProviderDiagnosticWarning] = []
     ) {
         self.provider = provider
         self.planName = planName
@@ -953,6 +968,7 @@ struct ProviderSnapshot: Equatable, Sendable {
         self.additionalUsageResetsAt = additionalUsageResetsAt
         self.usageBreakdown = usageBreakdown
         self.quotaSections = quotaSections
+        self.diagnosticWarnings = diagnosticWarnings
     }
 
     /// Whether the panel has anything to show beyond the provider header.

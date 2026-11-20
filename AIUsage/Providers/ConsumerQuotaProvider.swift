@@ -295,9 +295,23 @@ actor ConsumerQuotaProvider: UsageProvider {
                 inactiveDetail: "No Pro plan"
             ))
         }
+        var warnings = ResponseSchemaWatch.httpHeaders(response, provider: .manus, endpoint: "Manus")
+        warnings += ResponseSchemaWatch.jsonBodyDeprecation(root, provider: .manus, endpoint: "Manus")
+        warnings += ResponseSchemaWatch.jsonBodyDeprecation(data, provider: .manus, endpoint: "Manus")
+        warnings += ResponseSchemaWatch.confirmedJSONKeys(in: data, provider: .manus, endpoint: "Manus")
+        if let interval = ProviderParsing.string(data["refreshInterval"]),
+           let enumWarning = ResponseSchemaWatch.confirmedEnum(
+               interval,
+               provider: .manus,
+               endpoint: "Manus",
+               field: "refreshInterval"
+           ) {
+            warnings.append(enumWarning)
+        }
         return ProviderSnapshot(provider: .manus, planName: nil, windows: windows,
             fetchedAt: Date(), credentialSource: credentialSource, accountLabel: accountLabel,
-            usageScope: "Account allowance • Manus", usageDetails: details)
+            usageScope: "Account allowance • Manus", usageDetails: details,
+            diagnosticWarnings: ResponseSchemaWatch.deduplicated(warnings))
     }
     static func kimi(
         subscription: HTTPResponse,
@@ -381,10 +395,27 @@ actor ConsumerQuotaProvider: UsageProvider {
                 inactiveDetail: "No Kimi Code plan"
             ))
         }
+        var warnings = ResponseSchemaWatch.httpHeaders(subscription, provider: .kimi, endpoint: "Kimi")
+        warnings += ResponseSchemaWatch.httpHeaders(stats, provider: .kimi, endpoint: "Kimi")
+        warnings += ResponseSchemaWatch.jsonBodyDeprecation(account, provider: .kimi, endpoint: "Kimi")
+        warnings += ResponseSchemaWatch.jsonBodyDeprecation(usage, provider: .kimi, endpoint: "Kimi")
+        warnings += ResponseSchemaWatch.confirmedJSONKeys(in: account, provider: .kimi, endpoint: "Kimi GetSubscription")
+        warnings += ResponseSchemaWatch.confirmedJSONKeys(in: usage, provider: .kimi, endpoint: "Kimi GetSubscriptionStats")
+        for balance in balances {
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(in: balance, provider: .kimi, endpoint: "Kimi balance")
+        }
+        if let code {
+            warnings += ResponseSchemaWatch.httpHeaders(code, provider: .kimi, endpoint: "Kimi Code")
+            if let value = try? body(code) {
+                warnings += ResponseSchemaWatch.jsonBodyDeprecation(value, provider: .kimi, endpoint: "Kimi Code")
+                warnings += ResponseSchemaWatch.confirmedJSONKeys(in: value, provider: .kimi, endpoint: "Kimi GetUsages")
+            }
+        }
         let sub = account["subscription"] as? [String: Any]
         let goods = sub?["goods"] as? [String: Any]
         return ProviderSnapshot(provider: .kimi, planName: goods?["title"] as? String, windows: windows,
             fetchedAt: Date(), credentialSource: credentialSource, accountLabel: accountLabel,
-            usageScope: "Monthly membership • Kimi", usageDetails: notices)
+            usageScope: "Monthly membership • Kimi", usageDetails: notices,
+            diagnosticWarnings: ResponseSchemaWatch.deduplicated(warnings))
     }
 }

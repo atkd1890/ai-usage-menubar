@@ -207,8 +207,12 @@ struct UsageDashboardView: View {
             Divider()
             VStack(alignment: .leading, spacing: 12) {
                 sidebarTitle("Limits", symbol: "exclamationmark.circle.fill", tint: .red)
-                if providers.contains(where: { !(store.states[$0]?.snapshot?.quotaCompatibilityNotes.isEmpty ?? true) }) {
-                    Text("Some quota data is unsupported. Check the provider in Settings.")
+                let _ = ConfirmedSchemaObserver.shared.revision
+                if providers.contains(where: {
+                    guard let snapshot = store.states[$0]?.snapshot else { return false }
+                    return ConfirmedSchemaStore.shared.hasActiveWarnings(for: snapshot)
+                }) {
+                    Text("Some provider APIs changed or returned unsupported fields. Check the provider warning badge.")
                         .font(.caption).foregroundStyle(.orange)
                 }
                 Text("\(data.hitCount) observed hits").font(.system(size: 27, weight: .semibold))
