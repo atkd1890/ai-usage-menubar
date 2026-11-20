@@ -165,9 +165,9 @@ final class MiniMaxProviderTests: XCTestCase {
         )
         XCTAssertEqual(withAgentCredits.windows[0].inactiveDetail, "No Token Plan")
         XCTAssertEqual(withAgentCredits.windows[1].inactiveDetail, "No Token Plan")
-        XCTAssertEqual(withAgentCredits.windows[1].trailingDetail, "378.76 credits")
+        XCTAssertNil(withAgentCredits.windows[1].trailingDetail)
         XCTAssertEqual(withAgentCredits.usageDetails.map(\.id), ["minimax.credits"])
-        XCTAssertEqual(withAgentCredits.usageDetails.map(\.value), ["Design 340 · Hailuo 50"])
+        XCTAssertEqual(withAgentCredits.usageDetails.map(\.value), ["Agent 378.76 · Design 340 · Hailuo 50"])
     }
 
     func testDecryptsDesignV2EncWith16ByteIV() throws {

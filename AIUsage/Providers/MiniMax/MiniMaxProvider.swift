@@ -811,9 +811,6 @@ actor MiniMaxProvider: UsageProvider {
         }
 
         if !hasActiveTokenPlan {
-            let weeklyCredits = agentCreditsAmount.flatMap {
-                $0 > 0 ? "\(formatCredits($0)) credits" : nil
-            }
             windows = [
                 QuotaWindow(
                     kind: .session,
@@ -827,8 +824,7 @@ actor MiniMaxProvider: UsageProvider {
                     usedPercent: 0,
                     resetsAt: nil,
                     isInactive: true,
-                    inactiveDetail: "No Token Plan",
-                    trailingDetail: weeklyCredits
+                    inactiveDetail: "No Token Plan"
                 )
             ]
         }
@@ -842,6 +838,9 @@ actor MiniMaxProvider: UsageProvider {
         let hailuoWallet = walletEntries.first { QuotaDiscovery.number($0["source"]) == 0 }
 
         var creditParts: [String] = []
+        if !hasActiveTokenPlan, let agentCreditsAmount, agentCreditsAmount > 0 {
+            creditParts.append("Agent \(formatCredits(agentCreditsAmount))")
+        }
         if let designWallet, let designCredits = QuotaDiscovery.number(designWallet["total_credit"]) {
             creditParts.append("Design \(formatCredits(designCredits))")
         } else if walletObj != nil, let totalCredit = QuotaDiscovery.number(walletObj?["total_credit"]) {
