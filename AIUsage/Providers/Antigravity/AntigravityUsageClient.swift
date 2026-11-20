@@ -33,7 +33,7 @@ enum AntigravityHost: String, Equatable, Sendable, CaseIterable {
     var displayName: String {
         switch self {
         case .app: "Antigravity"
-        case .ide: "Antigravity IDE"
+        case .ide: "Code Assist"
         }
     }
 }

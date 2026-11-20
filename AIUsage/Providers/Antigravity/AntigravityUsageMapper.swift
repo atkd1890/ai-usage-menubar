@@ -22,7 +22,7 @@ enum AntigravityUsageMapper {
     ]
 
     /// Maps host-tagged `RetrieveUserQuotaSummary` responses. When both
-    /// `Antigravity` (`daily`) and `Antigravity IDE` (`prod`) respond with
+    /// `Antigravity` (`daily`) and `Code Assist` (`prod`) respond with
     /// quota windows, Row 1 (`session` / `weekly`) combines both into dual-series
     /// readings while `quotaSections` exposes each app's full breakdown.
     static func summary(

@@ -222,7 +222,7 @@ final class AntigravityTests: XCTestCase {
             now: now
         ))
 
-        XCTAssertEqual(snapshot.dashboardSubtitle, "Separate app limits • Antigravity & Antigravity IDE")
+        XCTAssertEqual(snapshot.dashboardSubtitle, "Separate app limits • Antigravity & Code Assist")
         XCTAssertEqual(snapshot.windows.map(\.kind), [.session, .weekly, .claudePool, .claudePoolWeekly, .argonWeekly])
         XCTAssertEqual(snapshot.windows[0].usedPercent, 9.71)
         XCTAssertEqual(snapshot.windows[0].series.map(\.id), ["antigravity-app", "antigravity-ide"])
@@ -232,7 +232,7 @@ final class AntigravityTests: XCTestCase {
         XCTAssertEqual(snapshot.windows[3].usedPercent, 26.41)
         XCTAssertEqual(snapshot.windows[4].usedPercent, 78.11)
 
-        XCTAssertEqual(snapshot.quotaSections.map(\.title), ["Antigravity", "Antigravity IDE"])
+        XCTAssertEqual(snapshot.quotaSections.map(\.title), ["Antigravity", "Code Assist"])
         XCTAssertEqual(snapshot.quotaSections[0].windows.map(\.usedPercent), [9.71, 14.98, 0, 0, 78.11])
         XCTAssertEqual(snapshot.quotaSections[1].windows.map(\.usedPercent), [0, 0, 0, 26.41, 0])
         for section in snapshot.quotaSections {
@@ -260,7 +260,7 @@ final class AntigravityTests: XCTestCase {
     func testDualQuotaBarLayoutPlacesLongerBarUnderneathAndSplitsEqualBars() {
         let series = [
             QuotaSeriesReading(id: "antigravity-app", title: "Antigravity", usedPercent: 9.71, resetsAt: nil),
-            QuotaSeriesReading(id: "antigravity-ide", title: "Antigravity IDE", usedPercent: 0, resetsAt: nil)
+            QuotaSeriesReading(id: "antigravity-ide", title: "Code Assist", usedPercent: 0, resetsAt: nil)
         ]
 
         let remaining = DualQuotaBarLayout.layout(series: series, displayMode: .remaining)
@@ -274,7 +274,7 @@ final class AntigravityTests: XCTestCase {
         let equalUnused = DualQuotaBarLayout.layout(
             series: [
                 QuotaSeriesReading(id: "antigravity-app", title: "Antigravity", usedPercent: 0, resetsAt: nil),
-                QuotaSeriesReading(id: "antigravity-ide", title: "Antigravity IDE", usedPercent: 0, resetsAt: nil)
+                QuotaSeriesReading(id: "antigravity-ide", title: "Code Assist", usedPercent: 0, resetsAt: nil)
             ],
             displayMode: .remaining
         )

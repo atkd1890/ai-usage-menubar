@@ -67,7 +67,7 @@ struct ProviderSectionView: View {
                     .lineLimit(1)
                     .padding(.horizontal, 13)
                     .padding(.bottom, 3.5)
-                    .help("Antigravity and Antigravity IDE have separate quota pools. Each summary bar overlays both apps with the longer bar underneath so both remain visible.")
+                    .help("Antigravity and Code Assist have separate quota pools. Each summary bar overlays both apps with the longer bar underneath so both remain visible.")
                 } else {
                     Text(scope)
                         .font(.caption2)

@@ -838,7 +838,7 @@ struct ProviderSnapshot: Equatable, Sendable {
         case .claude: return "Shared account limits • Chat, Code & Cowork"
         case .codex: return "Shared account limits • Codex & ChatGPT Work"
         case .cursor: return "Product usage limits • Editor, Auto & API"
-        case .antigravity: return "Separate app limits • Antigravity & Antigravity IDE"
+        case .antigravity: return "Separate app limits • Antigravity & Code Assist"
         case .copilot: return "Monthly Copilot quota • Chat & Completions"
         case .gemini: return "Shared account limits • Gemini App & Web"
         case .manus: return "Product usage limits • Agent Tasks & Credits"
