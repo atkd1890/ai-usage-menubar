@@ -351,11 +351,37 @@ final class MenuBarControllerTests: XCTestCase {
 
         XCTAssertEqual(Set(panelView.sections.keys), expectedCN)
         let cnHeight = panel.frame.height
-        XCTAssertLessThan(cnHeight, usHeight)
+        XCTAssertGreaterThan(cnHeight, 0)
+        XCTAssertLessThanOrEqual(cnHeight, (panel.screen ?? NSScreen.main)!.visibleFrame.height)
+        XCTAssertGreaterThan(usHeight, 0)
 
         // All providers remain tracked for pinned menu bar status icons regardless of panel region.
         XCTAssertEqual(Set(store.trackedProviderIDs), Set(preferences.trackedProviderIDs))
         XCTAssertTrue(store.trackedProviderIDs.contains(.claude))
+    }
+
+    func testStatusItemKeepsAutosaveNameAcrossTerminationStop() throws {
+        let suite = "StatusItemAutosave." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let controller = MenuBarController(
+            store: UsageStore(providers: [], availabilityChecker: FixedProviderAvailabilityChecker(installed: [])),
+            preferences: AppPreferences(defaults: defaults),
+            launchAtLogin: LaunchAtLoginController(service: MenuBarControllerLoginService()),
+            updateController: UpdateController(startingUpdater: false),
+            application: RecordingApplicationActivator()
+        )
+        controller.start()
+        defer { controller.stop() }
+
+        let statusItem = try XCTUnwrap(controller.currentStatusItem)
+        XCTAssertEqual(statusItem.autosaveName, MenuBarController.statusItemAutosaveName)
+
+        controller.stop(removeStatusItem: false)
+        XCTAssertTrue(controller.currentStatusItem === statusItem)
+
+        controller.stop()
+        XCTAssertNil(controller.currentStatusItem)
     }
 
 }

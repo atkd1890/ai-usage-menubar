@@ -284,6 +284,8 @@ final class UsagePanelPresentation {
 
 @MainActor
 final class MenuBarController: NSObject, NSWindowDelegate {
+    static let statusItemAutosaveName: NSStatusItem.AutosaveName = "com.burakgon.aiusage.statusItem"
+
     private let store: UsageStore
     private let preferences: AppPreferences
     private let launchAtLogin: LaunchAtLoginController
@@ -304,6 +306,7 @@ final class MenuBarController: NSObject, NSWindowDelegate {
     private var previousForegroundPID: pid_t?
     private let panelLog = Logger(subsystem: "com.burakgon.aiusage", category: "panel")
     var currentStatusButton: NSStatusBarButton? { statusItem?.button }
+    var currentStatusItem: NSStatusItem? { statusItem }
     private var settingsMeasuredHeight: CGFloat = 0
     private(set) var settingsWindow: NSWindow?
     private(set) var analyticsWindow: NSWindow?
@@ -337,9 +340,12 @@ final class MenuBarController: NSObject, NSWindowDelegate {
         guard !isStarted else { return }
         isStarted = true
 
-        let item = statusBar.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem = item
-        if let button = item.button {
+        if statusItem == nil {
+            let item = statusBar.statusItem(withLength: NSStatusItem.variableLength)
+            item.autosaveName = Self.statusItemAutosaveName
+            statusItem = item
+        }
+        if let button = statusItem?.button {
             appearanceObservation = button.observe(\.effectiveAppearance, options: [.new]) { [weak self] _, _ in
                 Task { @MainActor [weak self] in
                     guard let self else { return }
@@ -360,28 +366,29 @@ final class MenuBarController: NSObject, NSWindowDelegate {
         store.start()
     }
 
-    func stop() {
-        guard isStarted else { return }
-        isStarted = false
-        hasRenderedStatusImage = false
-        renderedAppearance = nil
-        appearanceObservation?.invalidate()
-        appearanceObservation = nil
-        store.stop()
-        hidePanel()
-        usagePanel?.delegate = nil
-        usagePanel?.close()
-        usagePanel?.contentViewController = nil
-        usagePanel = nil
-        dashboardHost = nil
-        settingsWindow?.close()
-        settingsWindow?.contentViewController = nil
-        settingsWindow = nil
-        analyticsWindow?.close()
-        analyticsWindow?.contentViewController = nil
-        analyticsWindow = nil
+    func stop(removeStatusItem: Bool = true) {
+        if isStarted {
+            isStarted = false
+            hasRenderedStatusImage = false
+            renderedAppearance = nil
+            appearanceObservation?.invalidate()
+            appearanceObservation = nil
+            store.stop()
+            hidePanel()
+            usagePanel?.delegate = nil
+            usagePanel?.close()
+            usagePanel?.contentViewController = nil
+            usagePanel = nil
+            dashboardHost = nil
+            settingsWindow?.close()
+            settingsWindow?.contentViewController = nil
+            settingsWindow = nil
+            analyticsWindow?.close()
+            analyticsWindow?.contentViewController = nil
+            analyticsWindow = nil
+        }
 
-        if let statusItem {
+        if removeStatusItem, let statusItem {
             statusBar.removeStatusItem(statusItem)
             self.statusItem = nil
         }
@@ -725,7 +732,6 @@ final class MenuBarController: NSObject, NSWindowDelegate {
         }
 
         button.attributedTitle = NSAttributedString()
-        button.image = nil
         button.title = ""
         button.image = MenuBarStatusImageRenderer.image(
             for: groups,

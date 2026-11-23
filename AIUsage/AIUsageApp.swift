@@ -62,8 +62,7 @@ final class AIUsageAppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        menuBarController?.stop()
-        menuBarController = nil
+        menuBarController?.stop(removeStatusItem: false)
     }
 
     @objc
