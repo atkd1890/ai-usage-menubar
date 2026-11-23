@@ -386,7 +386,7 @@ private struct ProviderSettingsRow: View {
                         loginChanged()
                     }
                     .frame(width: 184, alignment: .leading)
-                    if [ProviderID.manus, .muse, .qwen, .kimi, .adobe, .minimax, .qoder].contains(descriptor.id),
+                    if [ProviderID.manus, .muse, .qwen, .kimi, .adobe, .minimax, .qoder, .dola, .buddy, .zai].contains(descriptor.id),
                        state?.failure?.kind == .storage {
                         let method = preferences.loginMethod(for: descriptor.id)
                         if method == .edge {

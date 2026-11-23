@@ -2,7 +2,7 @@ import Foundation
 import SQLite3
 
 enum WebSessionSource: String, Sendable {
-    case edge, chrome, claudeDesktop, codexDesktop, manusDesktop
+    case edge, chrome, claudeDesktop, codexDesktop, manusDesktop, dolaDesktop
     var directory: String {
         switch self {
         case .edge: "Microsoft Edge/Default"
@@ -10,6 +10,7 @@ enum WebSessionSource: String, Sendable {
         case .claudeDesktop: "Claude"
         case .codexDesktop: "Codex"
         case .manusDesktop: "Manus"
+        case .dolaDesktop: "Cici/Default"
         }
     }
     var keychainService: String {
@@ -19,6 +20,7 @@ enum WebSessionSource: String, Sendable {
         case .claudeDesktop: "Claude Safe Storage"
         case .codexDesktop: "Codex Safe Storage"
         case .manusDesktop: "Manus Safe Storage"
+        case .dolaDesktop: "Cici Browser Safe Storage"
         }
     }
 }
@@ -39,6 +41,8 @@ struct WebSessionStore: Sendable {
             "chatgpt.com": ["__Secure-next-auth.session-token", "__Secure-next-auth.session-token.0", "__Secure-next-auth.session-token.1"],
             "cursor.com": ["WorkosCursorSessionToken"],
             "manus.im": ["session_id"],
+            "dola.com": Set(DolaProvider.cookieNames),
+            "www.codebuddy.ai": ["session", "session_2"],
             "muse.ai": ["hatch_sess", "hatch_gw"],
             "qwen.ai": ["refresh_token"],
             "kimi.ai": ["kimi-auth"],
@@ -48,17 +52,20 @@ struct WebSessionStore: Sendable {
         guard !names.isEmpty, Set(names).isSubset(of: allowed[domain] ?? []),
               source != .claudeDesktop || domain == "claude.ai",
               source != .codexDesktop || domain == "chatgpt.com",
-              source != .manusDesktop || domain == "manus.im" else {
+              source != .manusDesktop || domain == "manus.im",
+              source != .dolaDesktop || domain == "dola.com" else {
             throw ProviderFailure(.storage, "Unsupported session cookie request.")
         }
         let base = "~/Library/Application Support/\(source.directory)/"
         guard let path = [base + "Cookies", base + "Network/Cookies"].first(where: files.exists) else {
             throw ProviderFailure(.authentication, "No session found in the selected app or browser.")
         }
-        let selectedAccess = ["manus.im", "muse.ai", "qwen.ai", "kimi.ai", "services.adobe.com", "qoder.com", "design.minimax.io"].contains(domain) && (source == .edge || source == .chrome) ? BrowserDatabaseAccess.start(path: path) : nil
+        let selectedAccess = ["www.codebuddy.ai", "dola.com", "manus.im", "muse.ai", "qwen.ai", "kimi.ai", "services.adobe.com", "qoder.com", "design.minimax.io"].contains(domain) && (source == .edge || source == .chrome) ? BrowserDatabaseAccess.start(path: path) : nil
         defer { selectedAccess?.stopAccessingSecurityScopedResource() }
         let hosts: Set<String>
         switch domain {
+        case "www.codebuddy.ai":
+            hosts = ["www.codebuddy.ai", ".codebuddy.ai", "codebuddy.ai"]
         case "manus.im":
             hosts = ["manus.im", ".manus.im", "api.manus.im", ".api.manus.im"]
         case "kimi.ai":
@@ -89,7 +96,11 @@ struct WebSessionStore: Sendable {
             else {
                 if password == nil { password = try keychain.readGenericPassword(service: source.keychainService) }
                 guard let password else { throw ProviderFailure(.storage, "The selected Safe Storage is unavailable.") }
-                value = try GeminiAuthStore.decryptCookie(hex: row["encrypted"] ?? "", host: host, version: version, password: password)
+                do {
+                    value = try ChromiumSafeStorageCodec.decryptCookie(hex: row["encrypted"] ?? "", host: host, version: version, password: password)
+                } catch {
+                    throw ProviderFailure(.storage, "The selected app or browser session could not be decrypted.")
+                }
             }
             guard !value.isEmpty, !value.contains(where: { $0.isWhitespace || $0 == ";" }) else { throw ProviderFailure(.storage, "Invalid session cookie format.") }
             if let old = result[name], old != value { throw ProviderFailure(.authentication, "Conflicting account cookies. Sign in again.") }

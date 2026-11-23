@@ -258,9 +258,16 @@ struct LocalTextFileAccessor: TextFileAccessing {
 
 protocol KeychainAccessing: Sendable {
     func readGenericPassword(service: String) throws -> String?
+    func readGenericPassword(service: String, account: String) throws -> String?
     func writeGenericPassword(service: String, value: String) throws
     func readGenericPasswordForCurrentUser(service: String) throws -> String?
     func writeGenericPasswordForCurrentUser(service: String, value: String) throws
+}
+
+extension KeychainAccessing {
+    func readGenericPassword(service: String, account: String) throws -> String? {
+        try readGenericPassword(service: service)
+    }
 }
 
 struct SecurityKeychainAccessor: KeychainAccessing {
@@ -273,6 +280,15 @@ struct SecurityKeychainAccessor: KeychainAccessing {
 
     func readGenericPassword(service: String) throws -> String? {
         try readPassword(["find-generic-password", "-s", service, "-w"])
+    }
+
+    func readGenericPassword(service: String, account: String) throws -> String? {
+        try readPassword([
+            "find-generic-password",
+            "-a", account,
+            "-s", service,
+            "-w"
+        ])
     }
 
     func readGenericPasswordForCurrentUser(service: String) throws -> String? {
@@ -303,7 +319,7 @@ struct SecurityKeychainAccessor: KeychainAccessing {
             executable: "/usr/bin/security",
             arguments: arguments,
             environment: [:],
-            timeout: 5
+            timeout: 30
         )
         guard result.succeeded else {
             if result.exitCode == Self.itemNotFoundExitCode { return nil }

@@ -78,27 +78,8 @@ struct GeminiAuthStore: Sendable {
     }
 
     static func decryptCookie(hex: String, host: String, version: Int, password: String) throws -> String {
-        guard !hex.isEmpty, hex.count % 2 == 0 else { throw storageFailure }
-        var bytes = Data()
-        var index = hex.startIndex
-        while index < hex.endIndex {
-            let next = hex.index(index, offsetBy: 2)
-            guard let byte = UInt8(hex[index..<next], radix: 16) else { throw storageFailure }
-            bytes.append(byte)
-            index = next
-        }
-        guard var plaintext = try? ChromiumSafeStorageCodec.decrypt(bytes, password: password) else {
-            throw storageFailure
-        }
-        if version >= 24 {
-            let hostHash = Data(SHA256.hash(data: Data(host.utf8)))
-            guard plaintext.starts(with: hostHash) else { throw storageFailure }
-            plaintext = Data(plaintext.dropFirst(hostHash.count))
-        }
-        guard let token = String(data: plaintext, encoding: .utf8), !token.isEmpty else {
-            throw storageFailure
-        }
-        return token
+        do { return try ChromiumSafeStorageCodec.decryptCookie(hex: hex, host: host, version: version, password: password) }
+        catch { throw storageFailure }
     }
 
     static var signInRequired: ProviderFailure {

@@ -34,6 +34,7 @@ actor WebUsageProvider: UsageProvider {
         case .claudeDesktop: "Claude desktop"
         case .codexDesktop: "Codex desktop"
         case .manusDesktop: "Manus desktop"
+        case .dolaDesktop: "Dola desktop"
         }
     }
     private func request(_ url: String, cookie: String, token: String? = nil,

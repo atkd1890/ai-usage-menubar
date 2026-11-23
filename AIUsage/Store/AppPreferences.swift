@@ -175,6 +175,18 @@ final class AppPreferences {
             initialTrackedProviders.insert(.qoder)
             defaults.set(true, forKey: "qoderProviderAdded.v1")
         }
+        if defaults.object(forKey: "buddyProviderAdded.v1") == nil {
+            initialTrackedProviders.insert(.buddy)
+            defaults.set(true, forKey: "buddyProviderAdded.v1")
+        }
+        if defaults.object(forKey: "zaiProviderAdded.v2") == nil {
+            initialTrackedProviders.insert(.zai)
+            defaults.set(true, forKey: "zaiProviderAdded.v2")
+        }
+        if defaults.object(forKey: "dolaProviderAdded.v1") == nil {
+            initialTrackedProviders.insert(.dola)
+            defaults.set(true, forKey: "dolaProviderAdded.v1")
+        }
         trackedProviderIDs = initialTrackedProviders
         // Property observers do not run in an initializer.
         if restoredProviders.map(Set.init) != initialTrackedProviders {
@@ -643,6 +655,7 @@ enum ProviderLoginMethod: String, CaseIterable, Identifiable, Sendable {
         case .qwen: [.desktop, .edge, .chrome]
         case .minimax: [.desktop, .edge, .chrome]
         case .qoder: [.desktop, .edge, .chrome]
+        case .dola, .zai, .buddy: [.desktop, .edge, .chrome]
         case .cursor: [.desktop, .edge, .chrome]
         case .codex: [.cli, .edge, .chrome]
         case .claude: [.cli, .desktop, .edge, .chrome]
@@ -701,6 +714,10 @@ extension ProviderLoginMethod {
             default: break
             }
         }
+        if self == .desktop, provider == .zai { return "ZCode desktop" }
+        if self == .desktop, provider == .buddy { return "CodeBuddy desktop" }
+        if self == .edge, provider == .buddy { return "CodeBuddy web (Edge)" }
+        if self == .chrome, provider == .buddy { return "CodeBuddy web (Chrome)" }
         if self == .cli, provider == .codex { return "Desktop app / Local OAuth" }
         if self == .cli, provider == .claude { return "Local OAuth" }
         return title

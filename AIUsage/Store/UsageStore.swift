@@ -80,7 +80,7 @@ final class UsageStore {
         return [CredentialSelectingProvider(local: ClaudeProvider(identity: AccountIdentityClient())), CredentialSelectingProvider(local: CodexProvider()),
                 CredentialSelectingProvider(local: CursorProvider(identity: AccountIdentityClient())),
                 ConsumerQuotaProvider(id: .manus), ConsumerQuotaProvider(id: .kimi), MuseProvider(), QwenProvider(), AdobeProvider(),
-                MiniMaxProvider(), QoderProvider(),
+                MiniMaxProvider(), QoderProvider(), DolaProvider(), ZAIProvider(), BuddyProvider(),
                 AntigravityDesktopProvider(), CopilotProvider(method: { .selected(for: .copilot) }, identity: AccountIdentityClient()),
                 GeminiProvider(native: GeminiNativeProvider(session: google), identity: AccountIdentityClient())]
     }
@@ -172,7 +172,7 @@ final class UsageStore {
                 self?.states[provider.id]?.isRefreshing = true
             }
 
-            let fetchResults = await withTaskGroup(
+            await withTaskGroup(
                 of: FetchResult.self
             ) { group in
                 for provider in effectiveProviders {
@@ -199,15 +199,12 @@ final class UsageStore {
                     }
                 }
 
-                var results: [FetchResult] = []
                 for await result in group {
-                    results.append(result)
+                    guard !Task.isCancelled, self?.refreshGeneration == generation else { continue }
+                    self?.applyFetchResults([result])
                 }
-                return results
             }
 
-            guard !Task.isCancelled else { return }
-            self?.applyFetchResults(fetchResults)
         }
         refreshTask = task
         await task.value
@@ -362,7 +359,7 @@ final class UsageStore {
         }
 
         if let latest = successfulDates.max() {
-            lastSuccessfulRefreshAt = latest
+            lastSuccessfulRefreshAt = max(lastSuccessfulRefreshAt ?? latest, latest)
         }
     }
 

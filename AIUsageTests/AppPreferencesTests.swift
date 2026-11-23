@@ -22,6 +22,8 @@ final class AppPreferencesTests: XCTestCase {
 
     @MainActor
     func testLoginMethodsPersistAndRejectUnsupportedSources() {
+        XCTAssertEqual(ProviderLoginMethod.supported(for: .zai), [.desktop, .edge, .chrome])
+        XCTAssertEqual(ProviderLoginMethod.supported(for: .buddy), [.desktop, .edge, .chrome])
         XCTAssertEqual(ProviderLoginMethod.supported(for: .cursor), [.desktop, .edge, .chrome])
         XCTAssertEqual(ProviderLoginMethod.supported(for: .claude), [.cli, .desktop, .edge, .chrome])
         XCTAssertEqual(ProviderLoginMethod.supported(for: .codex), [.cli, .edge, .chrome])
@@ -492,7 +494,7 @@ final class AppPreferencesTests: XCTestCase {
         let firstUpdatedRun = AppPreferences(defaults: defaults)
         XCTAssertEqual(
             firstUpdatedRun.trackedProviderIDs,
-            [.claude, .cursor, .antigravity, .copilot, .gemini, .manus, .kimi, .muse, .qwen, .adobe, .minimax, .qoder]
+            [.claude, .cursor, .antigravity, .copilot, .gemini, .manus, .kimi, .muse, .qwen, .adobe, .minimax, .qoder, .dola, .zai, .buddy]
         )
 
         firstUpdatedRun.setTracking(false, for: .copilot)
@@ -539,7 +541,7 @@ final class AppPreferencesTests: XCTestCase {
         }
         XCTAssertEqual(
             AppPreferences(defaults: defaults).trackedProviderIDs,
-            [.claude, .codex, .gemini, .manus, .kimi, .muse, .qwen, .adobe, .minimax, .qoder]
+            [.claude, .codex, .gemini, .manus, .kimi, .muse, .qwen, .adobe, .minimax, .qoder, .dola, .zai, .buddy]
         )
     }
 
@@ -590,7 +592,7 @@ final class AppPreferencesTests: XCTestCase {
         )
         XCTAssertEqual(
             Set(cnProviders),
-            [.manus, .kimi, .qwen, .minimax, .qoder]
+            [.manus, .kimi, .qwen, .minimax, .qoder, .dola, .zai, .buddy]
         )
         XCTAssertTrue(Set(usProviders).isDisjoint(with: Set(cnProviders)))
         XCTAssertEqual(Set(usProviders).union(cnProviders), Set(ProviderID.enabledCases))

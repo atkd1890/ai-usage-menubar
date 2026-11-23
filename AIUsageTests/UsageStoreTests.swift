@@ -526,6 +526,44 @@ final class UsageStoreTests: XCTestCase {
         XCTAssertEqual(UsageDisplayMode.allCases, [.remaining, .used])
     }
 
+    func testCompletedProviderPublishesWhileAnotherWaitsForPermission() async throws {
+        let newest = Date(timeIntervalSince1970: 1_800_000_000)
+        let fastSnapshot = ProviderSnapshot(provider: .codex, planName: "Test", windows: [], fetchedAt: newest)
+        let slowSnapshot = ProviderSnapshot(provider: .buddy, planName: "Test", windows: [], fetchedAt: newest.addingTimeInterval(-10))
+        let waiting = PermissionWaitingProvider(snapshot: slowSnapshot)
+        let store = UsageStore(providers: [SequencedProvider(id: .codex, results: [.success(fastSnapshot)]), waiting],
+            availabilityChecker: FixedProviderAvailabilityChecker(installed: [.codex, .buddy]))
+        let refresh = Task { await store.refresh() }
+        for _ in 0..<200 where store.states[.codex]?.snapshot == nil { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(store.states[.codex]?.snapshot, fastSnapshot)
+        XCTAssertEqual(store.states[.codex]?.isRefreshing, false)
+        XCTAssertEqual(store.states[.buddy]?.isRefreshing, true)
+        XCTAssertNil(store.states[.buddy]?.snapshot)
+        await waiting.release()
+        await refresh.value
+        XCTAssertEqual(store.states[.buddy]?.snapshot, slowSnapshot)
+        XCTAssertEqual(store.lastSuccessfulRefreshAt, newest, "A later completion of older data must not move the timestamp backwards")
+    }
+
+    func testReconnectingDiscardsAResultFromThePreviousSource() async throws {
+        let old = ProviderSnapshot(provider: .buddy, planName: "Old", windows: [], fetchedAt: Date())
+        let current = ProviderSnapshot(provider: .buddy, planName: "New", windows: [], fetchedAt: Date())
+        let waiting = PermissionWaitingProvider(snapshot: old, subsequent: current)
+        let store = UsageStore(providers: [waiting], availabilityChecker: FixedProviderAvailabilityChecker(installed: [.buddy]))
+        let previousRefresh = Task { await store.refresh() }
+        for _ in 0..<200 {
+            if await waiting.hasStarted { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        store.reconnect(providerIDs: [.buddy])
+        for _ in 0..<200 where store.states[.buddy]?.snapshot == nil { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(store.states[.buddy]?.snapshot, current)
+        await waiting.release()
+        await previousRefresh.value
+        XCTAssertEqual(store.states[.buddy]?.snapshot, current)
+        store.stop()
+    }
+
     private func snapshot(
         provider: ProviderID,
         session: Double,
@@ -548,5 +586,26 @@ final class UsageStoreTests: XCTestCase {
             ],
             fetchedAt: Date()
         )
+    }
+}
+
+private actor PermissionWaitingProvider: UsageProvider {
+    nonisolated let id = ProviderID.buddy
+    let snapshot: ProviderSnapshot
+    let subsequent: ProviderSnapshot?
+    var hasStarted = false
+    private var continuation: CheckedContinuation<ProviderSnapshot, Never>?
+    private var released = false
+    init(snapshot: ProviderSnapshot, subsequent: ProviderSnapshot? = nil) { self.snapshot = snapshot; self.subsequent = subsequent }
+    func fetch() async throws -> ProviderSnapshot {
+        if hasStarted, let subsequent { return subsequent }
+        hasStarted = true
+        if released { return snapshot }
+        return await withCheckedContinuation { continuation = $0 }
+    }
+    func release() {
+        released = true
+        continuation?.resume(returning: snapshot)
+        continuation = nil
     }
 }

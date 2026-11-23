@@ -15,7 +15,7 @@ import XCTest
         let size = host.sizeThatFits(in: NSSize(width: 750, height: CGFloat.greatestFiniteMagnitude))
         XCTAssertEqual(size.width, 750, accuracy: 1)
         XCTAssertGreaterThan(size.height, 400)
-        XCTAssertLessThan(size.height, 1500)
+        XCTAssertLessThan(size.height, 700 + CGFloat(ProviderID.enabledCases.count) * 80)
         let window = NSWindow(contentRect: NSRect(x: -10000, y: 0, width: size.width, height: size.height), styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.appearance = NSAppearance(named: .darkAqua)

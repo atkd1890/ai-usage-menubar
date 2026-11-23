@@ -17,6 +17,30 @@ final class VisualSnapshotTests: XCTestCase {
         }
     }
 
+    func testLargeQuotaCountsWrapFooterWithoutChangingExactValues() throws {
+        let footer = QuotaFooter(reset: "Reset 13h 4m", note: nil, count: "3,000,000 / 3,000,000")
+        let narrow = measuredSize(of: footer, width: 188)
+        let wide = measuredSize(of: footer, width: 400)
+        XCTAssertEqual(narrow.width, 188, accuracy: 0.5)
+        XCTAssertGreaterThan(narrow.height, wide.height + 5)
+        XCTAssertLessThan(narrow.height, 45)
+        let short = measuredSize(of: QuotaFooter(reset: "Reset 13h 4m", note: nil, count: "100 / 100"), width: 188)
+        XCTAssertEqual(short.height, wide.height, accuracy: 1)
+        let compact3M = measuredSize(of: QuotaFooter(reset: "Reset 13h 4m", note: nil, count: "3M / 3M"), width: 188)
+        let compact5M = measuredSize(of: QuotaFooter(reset: "Reset 13h 4m", note: nil, count: "5M / 5M"), width: 188)
+        XCTAssertEqual(compact3M.height, wide.height, accuracy: 1)
+        XCTAssertEqual(compact5M.height, wide.height, accuracy: 1)
+        let snapshot = ProviderSnapshot(provider: .zai, planName: "Start Plan", windows: [
+            QuotaWindow(kind: .additional(id: "fake.model.a", title: "Model A tokens"), usedPercent: 0, resetsAt: Date().addingTimeInterval(3600), remainingCount: 3000000, limitCount: 3000000),
+            QuotaWindow(kind: .additional(id: "fake.model.b", title: "Model B tokens"), usedPercent: 0, resetsAt: Date().addingTimeInterval(3600), remainingCount: 5000000, limitCount: 5000000)
+        ], fetchedAt: Date())
+        let root = ProviderSectionView(state: ProviderState(provider: .zai, snapshot: snapshot), displayMode: .remaining)
+            .padding(12).frame(width: 440).fixedSize(horizontal: false, vertical: true).environment(\.colorScheme, .dark)
+        let host = NSHostingView(rootView: root)
+        host.setFrameSize(host.fittingSize); host.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(host.bounds.height, 60)
+    }
+
     func testUsagePaletteAdaptsToLightAndDarkAppearances() {
         var light = EnvironmentValues()
         light.colorScheme = .light
@@ -164,7 +188,7 @@ final class VisualSnapshotTests: XCTestCase {
             XCTAssertEqual(size.width, width, accuracy: 0.5)
             // Enabled products grouped into US and CN zones replace the original nine-row panel.
             // The native settings window constrains and scrolls taller content.
-            XCTAssertLessThan(size.height, 1500)
+            XCTAssertLessThan(size.height, 700 + CGFloat(ProviderID.enabledCases.count) * 80)
             XCTAssertGreaterThan(size.height, 300)
         }
 

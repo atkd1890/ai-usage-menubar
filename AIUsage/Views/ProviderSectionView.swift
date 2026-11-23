@@ -67,7 +67,7 @@ struct ProviderSectionView: View {
                     .lineLimit(1)
                     .padding(.horizontal, 13)
                     .padding(.bottom, 3.5)
-                    .help("Antigravity and Code Assist have separate quota pools. Each summary bar overlays both apps with the longer bar underneath so both remain visible.")
+                    .help("Independent quota readings are overlaid with the longer bar underneath so both remain visible.")
                 } else {
                     Text(scope)
                         .font(.caption2)
@@ -186,6 +186,8 @@ struct ProviderSectionView: View {
         ForEach(details) { detail in
             if detail.id.hasSuffix(".credits") {
                 AdditionalCreditsRow(detail: detail, displayMode: displayMode)
+            } else if let targetDate = detail.targetDate {
+                CountdownDetailRow(title: detail.title, targetDate: targetDate, fallback: detail.value)
             } else {
                 HStack(alignment: .firstTextBaseline) {
                     Text(detail.title).foregroundStyle(.secondary)
@@ -392,6 +394,34 @@ enum CompactCountdown {
             return "\(hours)h \(minutes)m"
         }
         return "\(minutes)m"
+    }
+}
+
+extension ProviderUsageDetail {
+    static func countdownText(for targetDate: Date, from now: Date, fallback: String) -> String {
+        CompactCountdown.text(until: targetDate, from: now).map { "in \($0)" } ?? fallback
+    }
+}
+
+private struct CountdownDetailRow: View {
+    let title: String
+    let targetDate: Date
+    let fallback: String
+
+    @Environment(\.usagePanelVisible) private var isPanelVisible
+
+    var body: some View {
+        TimelineView(UsageMinuteSchedule(isActive: isPanelVisible)) { context in
+            HStack(alignment: .firstTextBaseline) {
+                Text(title).foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                Text(ProviderUsageDetail.countdownText(for: targetDate, from: context.date, fallback: fallback))
+                    .monospacedDigit()
+                    .multilineTextAlignment(.trailing)
+            }
+            .font(.caption)
+            .help(targetDate.formatted(date: .abbreviated, time: .shortened))
+        }
     }
 }
 
@@ -753,26 +783,11 @@ private struct QuotaTile: View {
                 let countText = window.countText(for: displayMode) ?? window.trailingDetail
                 let subtext = window.isInactive ? window.inactiveDetail : nil
                 if window.resetsAt != nil || countText != nil || subtext != nil {
-                    HStack(spacing: 5) {
-                        if let reset = window.resetsAt {
-                            Image(systemName: "clock")
-                                .foregroundStyle(.tertiary)
-                            Text(resetText(reset, relativeTo: context.date))
-                                .foregroundStyle(.secondary)
-                        } else if let subtext {
-                            Text(subtext)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer(minLength: 4)
-                        if let countText {
-                            Text(countText)
-                                .monospacedDigit()
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .font(.caption2)
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    QuotaFooter(
+                        reset: window.resetsAt.map { resetText($0, relativeTo: context.date) },
+                        note: subtext,
+                        count: countText
+                    )
                 }
             }
             .padding(.horizontal, 7)
@@ -828,10 +843,144 @@ private struct QuotaTile: View {
         } else {
             usage = "\(percentText) \(displayMode.valueSuffix)"
         }
-        guard let reset = window.resetsAt else {
-            return usage
+        var values = [usage]
+        if let count = window.countText(for: displayMode) ?? window.trailingDetail { values.append(count) }
+        if let reset = window.resetsAt { values.append(resetText(reset, relativeTo: now)) }
+        return values.joined(separator: ", ")
+    }
+}
+
+/// Preserves exact counts when a reset and a large balance cannot share one line.
+struct QuotaFooter: View {
+    let reset: String?
+    let note: String?
+    let count: String?
+
+    private var hasLeading: Bool { reset != nil || note != nil }
+
+    @ViewBuilder private var leading: some View {
+        if let reset {
+            HStack(spacing: 5) {
+                Image(systemName: "clock").foregroundStyle(.tertiary)
+                Text(reset)
+            }
+        } else if let note { Text(note) }
+    }
+
+    var body: some View {
+        QuotaFooterLayout(
+            spacing: 5,
+            verticalSpacing: 2,
+            alignSingleTrailing: !hasLeading && count != nil
+        ) {
+            if hasLeading {
+                leading
+            }
+            if let count {
+                Text(count).monospacedDigit()
+            }
         }
-        return "\(usage), \(resetText(reset, relativeTo: now))"
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct QuotaFooterLayout: Layout {
+    let spacing: CGFloat
+    let verticalSpacing: CGFloat
+    let alignSingleTrailing: Bool
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        guard !subviews.isEmpty else { return .zero }
+        if subviews.count == 1 {
+            let size = subviews[0].sizeThatFits(
+                ProposedViewSize(width: proposal.width, height: nil)
+            )
+            let width = proposal.width.flatMap { $0.isFinite ? max($0, size.width) : nil } ?? size.width
+            return CGSize(width: width, height: size.height)
+        }
+
+        let leadingSize = subviews[0].sizeThatFits(.unspecified)
+        let trailingSize = subviews[1].sizeThatFits(.unspecified)
+        let horizontalWidth = leadingSize.width + spacing + trailingSize.width
+        if let maxWidth = proposal.width, maxWidth.isFinite {
+            if horizontalWidth <= maxWidth {
+                return CGSize(
+                    width: maxWidth,
+                    height: max(leadingSize.height, trailingSize.height)
+                )
+            }
+            let wrappedLeading = subviews[0].sizeThatFits(
+                ProposedViewSize(width: maxWidth, height: nil)
+            )
+            let wrappedTrailing = subviews[1].sizeThatFits(
+                ProposedViewSize(width: maxWidth, height: nil)
+            )
+            return CGSize(
+                width: maxWidth,
+                height: wrappedLeading.height + verticalSpacing + wrappedTrailing.height
+            )
+        }
+        return CGSize(
+            width: horizontalWidth,
+            height: max(leadingSize.height, trailingSize.height)
+        )
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        guard !subviews.isEmpty else { return }
+        if subviews.count == 1 {
+            let widthProposal = ProposedViewSize(width: bounds.width, height: nil)
+            let size = subviews[0].sizeThatFits(widthProposal)
+            let x = alignSingleTrailing ? max(bounds.minX, bounds.maxX - size.width) : bounds.minX
+            subviews[0].place(
+                at: CGPoint(x: x, y: bounds.midY),
+                anchor: .leading,
+                proposal: widthProposal
+            )
+            return
+        }
+
+        let leadingSize = subviews[0].sizeThatFits(.unspecified)
+        let trailingSize = subviews[1].sizeThatFits(.unspecified)
+        if leadingSize.width + spacing + trailingSize.width <= bounds.width {
+            subviews[0].place(
+                at: CGPoint(x: bounds.minX, y: bounds.midY),
+                anchor: .leading,
+                proposal: ProposedViewSize(leadingSize)
+            )
+            subviews[1].place(
+                at: CGPoint(x: bounds.maxX, y: bounds.midY),
+                anchor: .trailing,
+                proposal: ProposedViewSize(trailingSize)
+            )
+        } else {
+            let widthProposal = ProposedViewSize(width: bounds.width, height: nil)
+            let wrappedLeading = subviews[0].sizeThatFits(widthProposal)
+            subviews[0].place(
+                at: CGPoint(x: bounds.minX, y: bounds.minY),
+                anchor: .topLeading,
+                proposal: widthProposal
+            )
+            subviews[1].place(
+                at: CGPoint(
+                    x: bounds.maxX,
+                    y: bounds.minY + wrappedLeading.height + verticalSpacing
+                ),
+                anchor: .topTrailing,
+                proposal: widthProposal
+            )
+        }
     }
 }
 
@@ -915,7 +1064,6 @@ enum QuotaSeriesColor {
     static func color(_ id: String) -> Color {
         switch id {
         case "antigravity-app": Color(nsColor: .systemBlue)
-        case "antigravity-ide": Color(nsColor: .systemPurple)
         default: Color(nsColor: .systemTeal)
         }
     }

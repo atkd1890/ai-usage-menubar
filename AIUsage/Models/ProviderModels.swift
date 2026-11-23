@@ -14,12 +14,15 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
     case adobe
     case minimax
     case qoder
+    case dola
+    case zai
+    case buddy
 
     // Keep enum cases for decoding saved preferences; only these providers run/show.
     static let enabledCases: [Self] = [
         .claude, .codex, .cursor, .antigravity, .copilot,
         .gemini, .manus, .kimi, .muse, .qwen, .adobe,
-        .minimax, .qoder
+        .minimax, .qoder, .dola, .zai, .buddy
     ]
 
     var isEnabledInBuild: Bool { Self.enabledCases.contains(self) }
@@ -40,6 +43,9 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .adobe: "Adobe"
         case .minimax: "MiniMax"
         case .qoder: "Qoder"
+        case .dola: "Dola"
+        case .zai: "Z.ai"
+        case .buddy: "Buddy"
         }
     }
 
@@ -58,6 +64,9 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .adobe: "ProviderAdobe"
         case .minimax: "ProviderMiniMax"
         case .qoder: "ProviderQoder"
+        case .dola: "ProviderDola"
+        case .zai: "ProviderZAI"
+        case .buddy: "ProviderBuddy"
         }
     }
 
@@ -65,7 +74,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
         switch self {
         case .claude, .codex, .cursor, .antigravity, .copilot, .gemini, .muse, .adobe:
             .us
-        case .manus, .kimi, .qwen, .minimax, .qoder:
+        case .manus, .kimi, .qwen, .minimax, .qoder, .dola, .zai, .buddy:
             .cn
         }
     }
@@ -88,7 +97,7 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .cursor: ["cursor"]
         case .antigravity: ["antigravity", "agy"]
         case .copilot: ["copilot", "github-copilot"]
-        case .gemini, .manus, .kimi, .muse, .qwen, .adobe, .minimax, .qoder: []
+        case .gemini, .manus, .kimi, .muse, .qwen, .adobe, .minimax, .qoder, .dola, .zai, .buddy: []
         }
     }
 
@@ -174,6 +183,19 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
                 "~/Library/Application Support/Microsoft Edge/Default/Cookies",
                 "~/Library/Application Support/Google/Chrome/Default/Cookies"
             ]
+        case .buddy:
+            [
+                "/Applications/CodeBuddy.app",
+                "~/Applications/CodeBuddy.app",
+                "~/Library/Application Support/CodeBuddy/User/globalStorage/state.vscdb"
+            ]
+        case .zai:
+            ["/Applications/ZCode.app", "~/Applications/ZCode.app", "~/.zcode/v2/credentials.json"]
+        case .dola:
+            ["/Applications/Cici.app", "~/Applications/Cici.app",
+             "~/Library/Application Support/Cici/Default/Cookies",
+             "~/Library/Application Support/Microsoft Edge/Default/Cookies",
+             "~/Library/Application Support/Google/Chrome/Default/Cookies"]
         case .qoder:
             [
                 "/Applications/Qoder.app",
@@ -192,6 +214,9 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
         switch self {
         case .manus: .daily
         case .kimi, .adobe: .monthly
+        case .buddy: .monthly
+        case .zai: .session
+        case .dola: .additional(id: "dola.usage", title: "Usage")
         case .cursor: .totalUsage
         case .copilot: .credits
         case .claude, .codex, .antigravity, .gemini, .muse, .qwen, .minimax, .qoder: .weekly
@@ -637,11 +662,40 @@ struct QuotaWindow: Identifiable, Equatable, Sendable {
     }
 
     static func formatCount(_ value: Double) -> String {
-        let rounded = (value * 100).rounded() / 100
-        if rounded.rounded() == rounded {
-            return Int(rounded).formatted(.number)
+        guard value.isFinite else { return "0" }
+        let magnitude = abs(value)
+        if magnitude >= 1_000_000_000 {
+            return formatCompact(value / 1_000_000_000, suffix: "B")
         }
-        return rounded.formatted(.number.precision(.fractionLength(0...2)))
+        if magnitude >= 1_000_000 {
+            let millions = (value / 1_000_000 * 100).rounded() / 100
+            if abs(millions) >= 1_000 {
+                return formatCompact(value / 1_000_000_000, suffix: "B")
+            }
+            return formatCompact(value / 1_000_000, suffix: "M")
+        }
+        if magnitude > 99_999 {
+            let thousands = (value / 1_000 * 100).rounded() / 100
+            if abs(thousands) >= 1_000 {
+                return formatCompact(value / 1_000_000, suffix: "M")
+            }
+            return formatCompact(value / 1_000, suffix: "K")
+        }
+        let rounded = (value * 100).rounded() / 100
+        let normalized = rounded == 0 ? 0 : rounded
+        if normalized.rounded() == normalized, abs(normalized) < Double(Int.max) {
+            return Int(normalized).formatted(.number)
+        }
+        return normalized.formatted(.number.precision(.fractionLength(0...2)))
+    }
+
+    private static func formatCompact(_ scaled: Double, suffix: String) -> String {
+        let rounded = (scaled * 100).rounded() / 100
+        let normalized = rounded == 0 ? 0 : rounded
+        if normalized.rounded() == normalized, abs(normalized) < Double(Int.max) {
+            return "\(Int(normalized).formatted(.number))\(suffix)"
+        }
+        return "\(normalized.formatted(.number.precision(.fractionLength(0...2))))\(suffix)"
     }
 }
 
@@ -803,17 +857,20 @@ struct ProviderUsageDetail: Equatable, Sendable, Identifiable {
     let title: String
     let value: String
     let boundedProgress: BoundedCreditProgress?
+    let targetDate: Date?
 
     init(
         id: String,
         title: String,
         value: String,
-        boundedProgress: BoundedCreditProgress? = nil
+        boundedProgress: BoundedCreditProgress? = nil,
+        targetDate: Date? = nil
     ) {
         self.id = id
         self.title = title
         self.value = value
         self.boundedProgress = boundedProgress
+        self.targetDate = targetDate
     }
 }
 
@@ -838,7 +895,7 @@ struct ProviderSnapshot: Equatable, Sendable {
         case .claude: return "Shared account limits • Chat, Code & Cowork"
         case .codex: return "Shared account limits • Codex & ChatGPT Work"
         case .cursor: return "Product usage limits • Editor, Auto & API"
-        case .antigravity: return "Separate app limits • Antigravity & Code Assist"
+        case .antigravity: return "Antigravity app limits • Gemini, Argon & 3rd-party"
         case .copilot: return "Monthly Copilot quota • Chat & Completions"
         case .gemini: return "Shared account limits • Gemini App & Web"
         case .manus: return "Product usage limits • Agent Tasks & Credits"
@@ -848,6 +905,9 @@ struct ProviderSnapshot: Equatable, Sendable {
         case .adobe: return "Generative credits • Firefly, Photoshop & Creative Cloud"
         case .minimax: return "Unified account • Agent, Design & Hailuo Video"
         case .qoder: return "Shared account limits • Qoder & Qoder IDE"
+        case .dola: return "Shared account limits • Chat & Work"
+        case .zai: return "Product usage limits • Coding Plan & ZCode"
+        case .buddy: return "Shared account limits • WorkBuddy & CodeBuddy"
         }
     }
 
@@ -879,6 +939,9 @@ struct ProviderSnapshot: Equatable, Sendable {
         else if provider == .qwen { prefix = "qwen-session:" }
         else if provider == .minimax { prefix = "minimax-session:" }
         else if provider == .qoder { prefix = "qoder-session:" }
+        else if provider == .dola { prefix = "dola-session:" }
+        else if provider == .zai { prefix = "zai-session:" }
+        else if provider == .buddy { prefix = "buddy-session:" }
         else { return nil }
         guard label.hasPrefix(prefix), label.dropFirst(prefix.count).count == 64,
               label.dropFirst(prefix.count).allSatisfy({ $0.isHexDigit }) else { return nil }

@@ -60,10 +60,52 @@ enum ConfirmedSchemaCatalog {
         case .qwen: qwen
         case .minimax: minimax
         case .qoder: qoder
+        case .dola: dola
+        case .zai: zai
+        case .buddy: buddy
         case .gemini: gemini
         case .antigravity: antigravity
         }
     }
+
+    private static let buddy = ProviderConfirmedSchema(endpoints: [
+        "Buddy summary": EndpointConfirmedSchema(jsonKeys: ["CreditGroups", "IsPaidUser", "IsProtectedPriceUser", "Packages", "ProTrialStatus", "SubscriptionPackageCode", "SubscriptionPackageName", "TotalCredits"], requiredJSONKeys: ["Packages"]),
+        "Buddy summary package": EndpointConfirmedSchema(jsonKeys: ["CapacityUnit", "CycleFrozenCapacity", "CycleRemainCapacity", "CycleTotalCapacity", "CycleUsedCapacity", "PackageCode", "TotalCount"]),
+        "Buddy credit group": EndpointConfirmedSchema(jsonKeys: ["CapacityUnit", "CycleFrozenCapacity", "CycleRemainCapacity", "CycleTotalCapacity", "CycleUsedCapacity", "Kind", "Name", "TotalCount"], enums: ["Kind": ["plan_base", "plan_bonus", "addon", "benefit"]]),
+        "Buddy package": EndpointConfirmedSchema(jsonKeys: ["AccountAttributes", "AccountId", "AppId", "AutoRenewFlag", "AutoRenewTimeSpan", "AutoRenewTimeUnit", "CapacityRemain", "CapacityRemainPrecise", "CapacitySize", "CapacitySizePrecise", "CapacityType", "CapacityUnit", "CapacityUsed", "CapacityUsedPrecise", "CreateTime", "CycleCapacityRemain", "CycleCapacityRemainPrecise", "CycleCapacitySize", "CycleCapacitySizePrecise", "CycleCapacityUsedPrecise", "CycleEndTime", "CycleStartTime", "DealName", "DeductionEndTime", "DeductionProperties", "DeductionStartTime", "ExpiredTime", "FeeType", "OriginUnit", "PackageCode", "PackageName", "PackageType", "PkgSourceType", "ProductCode", "ProductName", "Region", "RegionId", "RemainCycles", "ResourceCycleId", "ResourceId", "ResourceType", "Status", "SubProductCode", "SubProductName", "SupportAutoRenew", "SupportManualRenew", "Threshold", "TotalCycles", "Uin", "Zone", "ZoneId"])
+    ])
+
+    private static let zai = ProviderConfirmedSchema(endpoints: [
+        "Z.ai envelope": EndpointConfirmedSchema(jsonKeys: ["code", "msg", "success", "data"]),
+        "Z.ai subscription": EndpointConfirmedSchema(jsonKeys: ["productId", "productName", "status", "inCurrentPeriod", "billingCycle", "nextRenewTime", "autoRenew", "valid"], enums: ["status": ["VALID"]]),
+        "Z.ai quota": EndpointConfirmedSchema(jsonKeys: ["level", "limits"]),
+        "Z.ai limit": EndpointConfirmedSchema(jsonKeys: ["type", "unit", "number", "usage", "currentValue", "remaining", "percentage", "nextResetTime", "usageDetails"], enums: ["type": ["TOKENS_LIMIT", "CREDIT_LIMIT", "TIME_LIMIT"]]),
+        "Z.ai usage detail": EndpointConfirmedSchema(jsonKeys: ["modelCode", "displayName", "usage"]),
+        "Z.ai account": EndpointConfirmedSchema(jsonKeys: ["acState", "acSubmitType", "acType", "allLabelValue", "availableBalance", "avatar", "balance", "betaTester", "channel", "countryCode", "createTime", "customerName", "customerNumber", "email", "enableStatus", "enableTwoFa", "giveAmount", "id", "isNewUser", "isUniversity", "lastRequestTime", "nickName", "openId", "organizations", "phoneNumber", "phoneOpenId", "rechargeAmount", "remittanceAccount", "securityEncryptFlag", "source", "unionId", "userType", "watermarkCode", "wechatNickName", "whetherChanges"]),
+        "ZCode plan": EndpointConfirmedSchema(jsonKeys: ["plan_id", "user_plan_id", "name", "description", "priority", "status", "starts_at", "ends_at", "entitlements"], enums: ["status": ["active"]]),
+        "ZCode entitlement": EndpointConfirmedSchema(jsonKeys: ["entitlement_id", "grant_units", "show_name", "capabilities", "effective_at", "meter", "period", "priority", "unit_type"], enums: ["period": ["daily", "weekly", "monthly", "once"]]),
+        "ZCode balance": EndpointConfirmedSchema(jsonKeys: ["plans", "balances", "server_time"]),
+        "ZCode bucket": EndpointConfirmedSchema(jsonKeys: ["bucket_id", "user_plan_id", "plan_id", "entitlement_id", "show_name", "capabilities", "total_units", "used_units", "remaining_units", "available_units", "entitlement_priority", "plan_priority", "priority", "unit_type", "meter", "expires_at", "period_start", "period_end"])
+    ])
+
+    private static let dola = ProviderConfirmedSchema(endpoints: [
+        "Dola overview": EndpointConfirmedSchema(jsonKeys: [
+            "current_subscription", "enterprise_package_entitlement_groups", "enterprise_subscription",
+            "enterprise_window_limit_section", "entitlements", "incentive_quota_entitlements",
+            "is_membership_gift", "member_info", "package_entitlement_groups", "quota_package_entitlement_groups",
+            "service_current_time", "show_benefit_package_entry", "switch_data", "upgrade_guide", "window_limit_section"
+        ]),
+        "Dola member": EndpointConfirmedSchema(jsonKeys: ["has_business_subscription", "has_team_subscription",
+            "hasActiveSubscription", "hasEnterpriseSubscription", "usr_type"]),
+        "Dola window section": EndpointConfirmedSchema(jsonKeys: ["entitlement_count", "usage_exhausted", "window_limit_groups"]),
+        "Dola subscription": EndpointConfirmedSchema(jsonKeys: ["agreement_price", "agreement_status", "agreement_type",
+            "display", "effective_time", "end_time", "has_switched", "is_gift", "next_deduct_time", "period_type",
+            "sku_key", "source_type", "start_time", "status", "subscription_id", "subscription_type", "timezone"]),
+        "Dola subscription display": EndpointConfirmedSchema(jsonKeys: ["product_name"]),
+        "Dola status": EndpointConfirmedSchema(jsonKeys: ["has_subscribed", "is_subscribing"]),
+        "Dola usage": EndpointConfirmedSchema(jsonKeys: ["service_current_time", "total_used_percent", "window_limit_groups"]),
+        "Dola ogf": EndpointConfirmedSchema(jsonKeys: ["quota_left", "total_quota"])
+    ])
 
     // MARK: - 1. Claude (OAuth & claude.ai Web)
     private static let claude = ProviderConfirmedSchema(endpoints: [
