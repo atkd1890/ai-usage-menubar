@@ -162,15 +162,15 @@ final class AntigravityTests: XCTestCase {
         }
     }
 
-    func testDailyHostCanAddConsumedArgonAfterAllSharedPoolsArePresent() async throws {
+    func testAppHostPreservesArgonWithoutRequestingRetiredPool() async throws {
         let http = RoutedHTTPClient([
             prod + AntigravityUsageClient.summaryPath: [httpResponse(json: completeJSON)],
             daily + AntigravityUsageClient.summaryPath: [httpResponse(json: withArgonJSON)]
         ])
         let outcome = await AntigravityUsageClient(http: http).quotaSummary(accessToken: "test", project: nil, now: now)
         guard case .success(let summaries) = outcome else { return XCTFail("Expected quota summaries") }
-        XCTAssertEqual(summaries.count, 2)
-        XCTAssertEqual(summaries.map(\.host), [.ide, .app])
+        XCTAssertEqual(summaries.count, 1)
+        XCTAssertEqual(summaries.map(\.host), [.app])
         let snapshot = try XCTUnwrap(AntigravityUsageMapper.summary(summaries, planName: nil, now: now))
         let argon = try XCTUnwrap(snapshot.windows.first { $0.kind == .argonWeekly })
         XCTAssertEqual(argon.kind.title, "Argon")
@@ -181,7 +181,7 @@ final class AntigravityTests: XCTestCase {
         XCTAssertTrue(requests.allSatisfy { $0.headers["User-Agent"]?.hasPrefix("antigravity/hub/") == true })
     }
 
-    func testDualHostSummaryBuildsMergedRow1AndSeparateAppAndIDESections() throws {
+    func testRetiredCodeAssistIsExcludedEvenWhenReturnedAlongsideAppQuota() throws {
         let appBody = Data("""
         {"groups":[
           {"displayName":"Gemini Models","buckets":[
@@ -222,25 +222,13 @@ final class AntigravityTests: XCTestCase {
             now: now
         ))
 
-        XCTAssertEqual(snapshot.dashboardSubtitle, "Separate app limits • Antigravity & Code Assist")
+        XCTAssertEqual(snapshot.dashboardSubtitle, "Antigravity app limits • Gemini, Argon & 3rd-party")
         XCTAssertEqual(snapshot.windows.map(\.kind), [.session, .weekly, .claudePool, .claudePoolWeekly, .argonWeekly])
-        XCTAssertEqual(snapshot.windows[0].usedPercent, 9.71)
-        XCTAssertEqual(snapshot.windows[0].series.map(\.id), ["antigravity-app", "antigravity-ide"])
-        XCTAssertEqual(snapshot.windows[0].series.map(\.usedPercent), [9.71, 0])
-        XCTAssertEqual(snapshot.windows[1].usedPercent, 14.98)
-        XCTAssertEqual(snapshot.windows[1].series.map(\.usedPercent), [14.98, 0])
-        XCTAssertEqual(snapshot.windows[3].usedPercent, 26.41)
-        XCTAssertEqual(snapshot.windows[4].usedPercent, 78.11)
-
-        XCTAssertEqual(snapshot.quotaSections.map(\.title), ["Antigravity", "Code Assist"])
-        XCTAssertEqual(snapshot.quotaSections[0].windows.map(\.usedPercent), [9.71, 14.98, 0, 0, 78.11])
-        XCTAssertEqual(snapshot.quotaSections[1].windows.map(\.usedPercent), [0, 0, 0, 26.41, 0])
-        for section in snapshot.quotaSections {
-            XCTAssertEqual(
-                ProviderDetailsLayout.rows(section.windows).map { $0.map(\.kind) },
-                [[.session, .weekly], [.claudePool, .claudePoolWeekly], [.argonWeekly]]
-            )
-        }
+        XCTAssertEqual(snapshot.windows.map(\.usedPercent), [9.71, 14.98, 0, 0, 78.11])
+        XCTAssertTrue(snapshot.windows.allSatisfy { $0.series.isEmpty })
+        XCTAssertTrue(snapshot.quotaSections.isEmpty)
+        XCTAssertNil(AntigravityUsageMapper.summary(
+            [AntigravityHostSummary(host: .ide, data: ideBody)], planName: nil, now: now))
 
         let credentialed = snapshot.withCredential(source: "Antigravity app", account: "user@example.com")
         XCTAssertEqual(credentialed.quotaSections, snapshot.quotaSections)
@@ -284,9 +272,9 @@ final class AntigravityTests: XCTestCase {
 
     // MARK: - Cloud Code client
 
-    func testQuotaSummaryUsesTheClientIdentityAndChecksBothHosts() async {
+    func testQuotaSummaryUsesClientIdentityAndOnlyAppHost() async {
         let http = RoutedHTTPClient([
-            prod + AntigravityUsageClient.summaryPath: [httpResponse(json: withArgonJSON)]
+            daily + AntigravityUsageClient.summaryPath: [httpResponse(json: withArgonJSON)]
         ])
         let client = AntigravityUsageClient(http: http)
 
@@ -300,9 +288,10 @@ final class AntigravityTests: XCTestCase {
             return XCTFail("Expected a summary, got \(outcome)")
         }
         XCTAssertEqual(summaries.count, 1)
-        XCTAssertEqual(summaries.first?.host, .ide)
+        XCTAssertEqual(summaries.first?.host, .app)
         let requests = await http.capturedRequests()
-        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests[0].url.host, "daily-cloudcode-pa.googleapis.com")
         XCTAssertEqual(requests[0].headers["User-Agent"], AntigravityUsageClient.quotaSummaryUserAgent)
         XCTAssertTrue(AntigravityUsageClient.quotaSummaryUserAgent.hasPrefix("antigravity/"))
         let body = try? JSONSerialization.jsonObject(
@@ -311,7 +300,7 @@ final class AntigravityTests: XCTestCase {
         XCTAssertEqual(body, ["project": "project-1"])
     }
 
-    func testQuotaSummaryAsksTheDailyHostWhenProductionIsIncomplete() async {
+    func testQuotaSummaryIgnoresRetiredHost() async {
         let http = RoutedHTTPClient([
             prod + AntigravityUsageClient.summaryPath: [httpResponse(json: """
             {"groups":[{"buckets":[{"bucketId":"3p-weekly","remainingFraction":1}]}]}
@@ -328,8 +317,8 @@ final class AntigravityTests: XCTestCase {
         guard case let .success(summaries) = outcome else {
             return XCTFail("Expected summaries, got \(outcome)")
         }
-        XCTAssertEqual(summaries.count, 2)
-        XCTAssertEqual(summaries.map(\.host), [.ide, .app])
+        XCTAssertEqual(summaries.count, 1)
+        XCTAssertEqual(summaries.map(\.host), [.app])
         let body = await http.capturedRequests().first?.body
         XCTAssertEqual(body, Data("{}".utf8))
     }
@@ -415,7 +404,7 @@ final class AntigravityTests: XCTestCase {
 
     func testCodeAssistSendsTheClientMetadata() async throws {
         let http = RoutedHTTPClient([
-            prod + AntigravityUsageClient.planPath: [httpResponse(json: "{}")]
+            daily + AntigravityUsageClient.planPath: [httpResponse(json: "{}")]
         ])
 
         _ = await AntigravityUsageClient(http: http).loadCodeAssist(accessToken: "token")
@@ -431,10 +420,10 @@ final class AntigravityTests: XCTestCase {
 
     func testProviderReadsCloudQuotaWithPlanAndNeverTheModelList() async throws {
         let http = RoutedHTTPClient([
-            prod + AntigravityUsageClient.planPath: [httpResponse(json: """
+            daily + AntigravityUsageClient.planPath: [httpResponse(json: """
             {"paidTier":{"id":"g1-ultra-tier"},"cloudaicompanionProject":"p"}
             """)],
-            prod + AntigravityUsageClient.summaryPath: [httpResponse(json: completeJSON)]
+            daily + AntigravityUsageClient.summaryPath: [httpResponse(json: completeJSON)]
         ])
         let provider = makeProvider(http: http)
 
@@ -455,14 +444,14 @@ final class AntigravityTests: XCTestCase {
     func testRefusedTokenIsRenewedOnceAndCached() async throws {
         let files = MemoryFiles()
         let http = RoutedHTTPClient([
-            prod + AntigravityUsageClient.planPath: [
+            daily + AntigravityUsageClient.planPath: [
                 httpResponse(401),
                 httpResponse(json: "{}")
             ],
             AntigravityUsageClient.googleOAuthURL.absoluteString: [
                 httpResponse(json: #"{"access_token":"fresh","expires_in":3600}"#)
             ],
-            prod + AntigravityUsageClient.summaryPath: [httpResponse(json: completeJSON)]
+            daily + AntigravityUsageClient.summaryPath: [httpResponse(json: completeJSON)]
         ])
         let provider = makeProvider(http: http, files: files)
 
@@ -475,7 +464,7 @@ final class AntigravityTests: XCTestCase {
 
     func testDeniedQuotaFallsBackToTheRunningCLI() async throws {
         let cloud = RoutedHTTPClient([
-            prod + AntigravityUsageClient.planPath: [httpResponse(json: """
+            daily + AntigravityUsageClient.planPath: [httpResponse(json: """
             {"paidTier":{"id":"g1-pro-tier"}}
             """)],
             prod + AntigravityUsageClient.summaryPath: [httpResponse(403)],
@@ -518,7 +507,7 @@ final class AntigravityTests: XCTestCase {
 
     func testDeniedQuotaWithoutALocalToolKeepsTheLastReading() async {
         let http = RoutedHTTPClient([
-            prod + AntigravityUsageClient.planPath: [httpResponse(json: "{}")],
+            daily + AntigravityUsageClient.planPath: [httpResponse(json: "{}")],
             prod + AntigravityUsageClient.summaryPath: [httpResponse(403)],
             daily + AntigravityUsageClient.summaryPath: [httpResponse(403)]
         ])

@@ -37,7 +37,7 @@ final class AntigravityDesktopTests: XCTestCase {
     func testNativeRefreshIsAccountBoundMemoryCachedAndUsesOnlyAntigravityClient() async throws {
         let sqlite = NativeAntigravitySQLite()
         let credentials = AntigravityDesktopCredentials(sqlite: sqlite, exists: { $0.contains("Antigravity IDE/") })
-        let base = "https://cloudcode-pa.googleapis.com"
+        let base = "https://daily-cloudcode-pa.googleapis.com"
         let summary = httpResponse(json: #"{"groups":[{"displayName":"Gemini 4 Argon","buckets":[{"bucketId":"gemini-argon-weekly","window":"weekly","remainingFraction":0.01}]}]}"#)
         let http = RoutedHTTPClient([
             AntigravityUsageClient.googleOAuthURL.absoluteString: [
@@ -66,7 +66,7 @@ final class AntigravityDesktopTests: XCTestCase {
             XCTAssertTrue(form.contains(AntigravityUsageClient.googleClientID))
             XCTAssertFalse(form.contains("assistant"))
         }
-        XCTAssertTrue(requests.allSatisfy { ["oauth2.googleapis.com", "cloudcode-pa.googleapis.com", "daily-cloudcode-pa.googleapis.com"].contains($0.url.host!) })
+        XCTAssertTrue(requests.allSatisfy { ["oauth2.googleapis.com", "daily-cloudcode-pa.googleapis.com"].contains($0.url.host!) })
     }
 }
 private final class NativeAntigravitySQLite: SQLiteValueReading, @unchecked Sendable {

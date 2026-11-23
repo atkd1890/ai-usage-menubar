@@ -206,7 +206,7 @@ final class ResponseSchemaWatchTests: XCTestCase {
         }
         """#.utf8)
         let cleanSnapshot = try XCTUnwrap(AntigravityUsageMapper.summary(
-            [AntigravityHostSummary(host: .ide, data: cleanSummaryData)],
+            [AntigravityHostSummary(host: .app, data: cleanSummaryData)],
             planName: "Google AI Pro",
             now: now,
             extraDetails: [try XCTUnwrap(AntigravityUsageMapper.aiCreditsDetail(cleanLoadCodeAssist))],
@@ -222,7 +222,7 @@ final class ResponseSchemaWatchTests: XCTestCase {
         {"groups":[{"displayName":"Gemini","buckets":[{"bucketId":"gemini-5h","remainingFraction":1,"newBucketKey":true}]}]}
         """#.utf8)
         let driftedSnapshot = try XCTUnwrap(AntigravityUsageMapper.summary(
-            [AntigravityHostSummary(host: .ide, data: driftedSummary, headers: ["Sunset": "2027-01-01"])],
+            [AntigravityHostSummary(host: .app, data: driftedSummary, headers: ["Sunset": "2027-01-01"])],
             planName: nil,
             now: now,
             extraWarnings: AntigravityUsageMapper.codeAssistWarnings(driftedCodeAssist)

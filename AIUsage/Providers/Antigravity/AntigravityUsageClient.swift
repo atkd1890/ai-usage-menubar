@@ -33,7 +33,7 @@ enum AntigravityHost: String, Equatable, Sendable, CaseIterable {
     var displayName: String {
         switch self {
         case .app: "Antigravity"
-        case .ide: "Code Assist"
+        case .ide: "Legacy pool"
         }
     }
 }
@@ -84,12 +84,8 @@ private struct AntigravityGoogleTokenResponse: Decodable {
 }
 
 struct AntigravityUsageClient: Sendable {
-    /// Production first: the daily host can answer the quota summary with a
-    /// whole pool missing.
-    static let cloudBases = [
-        "https://cloudcode-pa.googleapis.com",
-        "https://daily-cloudcode-pa.googleapis.com"
-    ]
+    // Personal-account integration reads only the Antigravity app pool.
+    static let cloudBases = [AntigravityHost.app.baseURL]
     static let summaryPath = "/v1internal:retrieveUserQuotaSummary"
     static let planPath = "/v1internal:loadCodeAssist"
     static let googleOAuthURL = URL(
@@ -155,7 +151,7 @@ struct AntigravityUsageClient: Sendable {
 
     let http: HTTPClient
 
-    init(http: HTTPClient = URLSessionHTTPClient()) {
+    init(http: HTTPClient = GeminiReadOnlyHTTPClient(allowedHosts: ["oauth2.googleapis.com", "daily-cloudcode-pa.googleapis.com"])) {
         self.http = http
     }
 
@@ -189,8 +185,7 @@ struct AntigravityUsageClient: Sendable {
         return .unavailable
     }
 
-    /// Ask production first. Four shared pools do not prove completeness:
-    /// another host can still supply the independent Argon weekly bucket.
+    /// Read only the app endpoint; never probe the retired personal Code Assist pool.
     func quotaSummary(
         accessToken: String,
         project: String?,

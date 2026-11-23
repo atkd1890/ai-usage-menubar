@@ -5,6 +5,7 @@ import CryptoKit
 /// Only the two credential paths and read-only endpoints verified with the user's sessions.
 actor ConsumerQuotaProvider: UsageProvider {
     nonisolated let id: ProviderID
+    private let identity: AccountIdentityCache?
     private let http: any HTTPClient
     private let sessions: WebSessionStore
     private let nativeKimi: @Sendable () throws -> KimiNativeSession
@@ -20,8 +21,10 @@ actor ConsumerQuotaProvider: UsageProvider {
          allowRefresh: @escaping @Sendable () -> Bool = { UserDefaults.standard.bool(forKey: "kimiNativeRefreshAllowed.v1") },
          method: (@Sendable () -> ProviderLoginMethod)? = nil,
          kimiSessionStore: KimiSessionStore? = nil,
+         identity: AccountIdentityCache? = nil,
          now: @escaping @Sendable () -> Date = { Date() }) {
         self.id = id; self.sessions = sessions
+        self.identity = identity ?? (http == nil && id == .manus ? AccountIdentityCache(provider: .manus, source: "selected") : nil)
         self.nativeKimi = nativeKimi; self.allowRefresh = allowRefresh
         self.method = method ?? { ProviderLoginMethod.selected(for: id) }
         self.kimiSessionStore = kimiSessionStore ?? (http == nil ? KimiSessionStore() : nil)
@@ -42,11 +45,14 @@ actor ConsumerQuotaProvider: UsageProvider {
             token = String(cookie.dropFirst("session_id=".count))
             let fingerprint = Data(SHA256.hash(data: Data((label + "\0" + token).utf8)))
                 .map { String(format: "%02x", $0) }.joined()
-            return try Self.manus(
-                await request("https://api.manus.im/user.v1.UserService/GetAvailableCredits", token: token),
-                credentialSource: label,
-                accountLabel: "manus-session:" + fingerprint
-            )
+            let credits = try await request("https://api.manus.im/user.v1.UserService/GetAvailableCredits", token: token)
+            _ = try Self.body(credits)
+            let email = await identity?.read(credential: label + "\0" + token) {
+                let response = try await self.request("https://api.manus.im/user.v1.UserService/UserInfo", token: token)
+                return Self.manusProfileEmail(response)
+            }
+            return try Self.manus(credits, credentialSource: label,
+                accountLabel: "manus-session:" + fingerprint, email: email)
         }
         guard id == .kimi else { throw ProviderFailure(.invalidResponse, "Unsupported consumer provider.") }
         let load = nativeKimi
@@ -241,10 +247,16 @@ actor ConsumerQuotaProvider: UsageProvider {
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.date(from: raw) ?? ISO8601DateFormatter().date(from: raw)
     }
+    static func manusProfileEmail(_ response: HTTPResponse) -> String? {
+        guard response.statusCode == 200, let root = try? ProviderParsing.object(from: response.body) else { return nil }
+        return AccountEmail.validated(root["email"])
+    }
+
     static func manus(
         _ response: HTTPResponse,
         credentialSource: String = "Edge Default",
-        accountLabel: String? = nil
+        accountLabel: String? = nil,
+        email: String? = nil
     ) throws -> ProviderSnapshot {
         let root = try body(response)
         let data = (root["data"] ?? root["result"] ?? root["response"] ?? root["availableCredits"]) as? [String: Any] ?? root
@@ -308,8 +320,8 @@ actor ConsumerQuotaProvider: UsageProvider {
            ) {
             warnings.append(enumWarning)
         }
-        return ProviderSnapshot(provider: .manus, planName: nil, windows: windows,
-            fetchedAt: Date(), credentialSource: credentialSource, accountLabel: accountLabel,
+        return ProviderSnapshot(provider: .manus, planName: windows.contains { $0.kind == .additional(id: "manus.monthly", title: "Monthly") && !$0.isInactive } ? nil : "Free", windows: windows,
+            fetchedAt: Date(), credentialSource: credentialSource, accountLabel: accountLabel, accountEmail: AccountEmail.validated(email),
             usageScope: "Account allowance • Manus", usageDetails: details,
             diagnosticWarnings: ResponseSchemaWatch.deduplicated(warnings))
     }

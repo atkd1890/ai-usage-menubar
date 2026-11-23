@@ -79,7 +79,7 @@ actor AntigravityDesktopProvider: UsageProvider {
     private var metadata: (fingerprint: Data, plan: String?, project: String?, creditsDetail: ProviderUsageDetail?, codeAssistWarnings: [ProviderDiagnosticWarning], checked: Date)?
     init(credentials: AntigravityDesktopCredentials = AntigravityDesktopCredentials(),
          client: AntigravityUsageClient = AntigravityUsageClient(http: GeminiReadOnlyHTTPClient(
-            allowedHosts: ["oauth2.googleapis.com", "cloudcode-pa.googleapis.com", "daily-cloudcode-pa.googleapis.com"])),
+            allowedHosts: ["oauth2.googleapis.com", "daily-cloudcode-pa.googleapis.com"])),
          now: @escaping @Sendable () -> Date = { Date() }) {
         self.credentials = credentials; self.client = client; self.now = now
     }

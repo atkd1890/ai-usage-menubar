@@ -2,6 +2,19 @@ import XCTest
 @testable import AIUsage
 
 final class ConsumerQuotaTests: XCTestCase {
+    func testManusProfileEmailUsesOnlyValidatedAccountField() {
+        XCTAssertEqual(ConsumerQuotaProvider.manusProfileEmail(httpResponse(json: #"{"email":"person@example.invalid"}"#)), "person@example.invalid")
+        XCTAssertNil(ConsumerQuotaProvider.manusProfileEmail(httpResponse(json: #"{"nickname":"person@example.invalid","email":""}"#)))
+        XCTAssertNil(ConsumerQuotaProvider.manusProfileEmail(httpResponse(401)))
+    }
+    func testManusWithoutProAllocationHasFreeBadgeAndSelectedEmail() throws {
+        let response = httpResponse(json: #"{"maxRefreshCredits":300,"refreshCredits":0,"proMonthlyCredits":0,"periodicCredits":0}"#)
+        let snapshot = try ConsumerQuotaProvider.manus(response, credentialSource: "Manus desktop", email: "person@example.invalid")
+        XCTAssertEqual(snapshot.planName, "Free")
+        XCTAssertEqual(snapshot.identityEmail, "person@example.invalid")
+        XCTAssertEqual(snapshot.credentialSource, "Manus desktop")
+        XCTAssertEqual(snapshot.windows.first?.remainingCount, 0)
+    }
     func testKimiRefreshIsScopedRetriedOnceAndCachedOnlyForSameNativeSession() async throws {
         let subscription = httpResponse(json: #"{"subscription":{"goods":{"title":"Free"}}}"#)
         let stats = httpResponse(json: #"{"subscriptionBalance":{"feature":"FEATURE_OMNI","amountUsedRatio":0}}"#)
@@ -187,7 +200,7 @@ final class ConsumerQuotaTests: XCTestCase {
         XCTAssertEqual(failRequests[1].headers["Authorization"], "Bearer \(freshRefresh)")
         XCTAssertNil(store.load(for: "Kimi desktop"))
     }
-    func testManusDailyDoesNotCombineFreeCreditsOrInventPlan() throws {
+    func testManusDailyDoesNotCombineFreeCreditsAndUsesFreeBadgeWithoutPro() throws {
         let value = try ConsumerQuotaProvider.manus(httpResponse(json: #"{"totalCredits":1300,"freeCredits":1000,"refreshCredits":150,"maxRefreshCredits":300,"nextRefreshTime":"2026-11-14T00:00:00Z"}"#))
         XCTAssertEqual(value.windows.count, 2)
         XCTAssertEqual(value.windows.first?.kind, .daily)
@@ -199,7 +212,7 @@ final class ConsumerQuotaTests: XCTestCase {
         XCTAssertTrue(value.windows[1].isInactive)
         XCTAssertEqual(value.windows[1].inactiveDetail, "No Pro plan")
         XCTAssertEqual(value.availableMenuBarItems.map(\.metric), [.daily])
-        XCTAssertNil(value.planName)
+        XCTAssertEqual(value.planName, "Free")
         XCTAssertNil(value.billingUsage)
         XCTAssertEqual(value.usageDetails, [
             ProviderUsageDetail(
