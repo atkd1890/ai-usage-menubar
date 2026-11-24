@@ -37,6 +37,8 @@ final class AppPreferencesTests: XCTestCase {
         XCTAssertEqual(ProviderLoginMethod.cli.title(for: .codex), "Desktop app / Local OAuth")
         XCTAssertEqual(ProviderLoginMethod.cli.title(for: .claude), "Local OAuth")
         XCTAssertEqual(ProviderLoginMethod.editorFallback.title(for: .copilot), "Local OAuth / GitHub CLI")
+        XCTAssertEqual(ProviderLoginMethod.supported(for: .zai).map { $0.title(for: .zai) }, ["Desktop app", "Browser (Edge)", "Browser (Chrome)"])
+        XCTAssertEqual(ProviderLoginMethod.supported(for: .buddy).map { $0.title(for: .buddy) }, ["Desktop app", "Browser (Edge)", "Browser (Chrome)"])
         let preferences = AppPreferences(defaults: defaults)
         preferences.setLoginMethod(.edge, for: .manus)
         XCTAssertEqual(AppPreferences(defaults: defaults).loginMethod(for: .manus), .edge)

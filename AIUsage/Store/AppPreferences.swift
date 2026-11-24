@@ -745,10 +745,6 @@ extension ProviderLoginMethod {
             default: break
             }
         }
-        if self == .desktop, provider == .zai { return "ZCode desktop" }
-        if self == .desktop, provider == .buddy { return "CodeBuddy desktop" }
-        if self == .edge, provider == .buddy { return "CodeBuddy web (Edge)" }
-        if self == .chrome, provider == .buddy { return "CodeBuddy web (Chrome)" }
         if self == .cli, provider == .codex { return "Desktop app / Local OAuth" }
         if self == .cli, provider == .claude { return "Local OAuth" }
         return title
