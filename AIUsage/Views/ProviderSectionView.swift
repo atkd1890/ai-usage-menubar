@@ -83,7 +83,7 @@ struct ProviderSectionView: View {
                 let summary = ProviderDetailsLayout.summaryWindows(snapshot)
                 let detailGridWindows = ProviderDetailsLayout.detailWindows(snapshot)
                 if part != .details && !summary.isEmpty {
-                    QuotaGrid(windows: summary, displayMode: displayMode)
+                    QuotaGrid(windows: summary, measuredAt: snapshot.fetchedAt, displayMode: displayMode)
                         .padding(.horizontal, 6)
                         .padding(.bottom, 4.5)
                 }
@@ -96,7 +96,7 @@ struct ProviderSectionView: View {
                 }
                 if part == .details || (part == .all && showsDetails) {
                     if !detailGridWindows.isEmpty {
-                        QuotaGrid(windows: detailGridWindows, displayMode: displayMode)
+                        QuotaGrid(windows: detailGridWindows, measuredAt: snapshot.fetchedAt, displayMode: displayMode)
                             .padding(.horizontal, 6)
                             .padding(.bottom, 4.5)
                     }
@@ -115,7 +115,7 @@ struct ProviderSectionView: View {
                         }
                         .padding(.horizontal, 13)
                         .padding(.bottom, 2)
-                        QuotaGrid(windows: section.windows, displayMode: displayMode)
+                        QuotaGrid(windows: section.windows, measuredAt: snapshot.fetchedAt, displayMode: displayMode)
                             .padding(.horizontal, 6)
                             .padding(.bottom, 4.5)
                     }
@@ -425,6 +425,46 @@ private struct CountdownDetailRow: View {
     }
 }
 
+/// The tile's reset line, with when a session runs out at its current pace
+/// when that comes first.
+struct QuotaTimingPresentation: Equatable {
+    let isAtRisk: Bool
+    let text: String?
+    let compactText: String?
+    let accessibilityText: String?
+
+    init(window: QuotaWindow, measuredAt: Date, now: Date) {
+        guard let reset = window.resetsAt else {
+            isAtRisk = false
+            text = nil
+            compactText = nil
+            accessibilityText = nil
+            return
+        }
+        let resetText = CompactCountdown.text(until: reset, from: now)
+            .map { "Reset \($0)" } ?? "Resetting"
+        // Once the reset has passed, the reading predates it: no forecast.
+        guard now < reset,
+              let exhaustion = window.projectedExhaustion(measuredAt: measuredAt) else {
+            isAtRisk = false
+            text = resetText
+            compactText = resetText
+            accessibilityText = resetText
+            return
+        }
+        let countdown = CompactCountdown.text(until: exhaustion, from: now)
+        isAtRisk = true
+        // "Out" reads the same whether the tile shows what is used or what
+        // is left, and is short enough to keep the reset beside it.
+        let forecastText = "Out \(countdown ?? "soon")"
+        let spokenForecast = countdown.map { "runs out in \($0)" }
+            ?? "runs out soon"
+        compactText = forecastText
+        text = "\(forecastText) · \(resetText)"
+        accessibilityText = "\(spokenForecast) at this pace, \(resetText)"
+    }
+}
+
 struct ResetsPresentation: Equatable {
     static let expiringSoonInterval: TimeInterval = 24 * 60 * 60
 
@@ -529,6 +569,7 @@ private struct ResetsRow: View {
 
 private struct QuotaGrid: View {
     let windows: [QuotaWindow]
+    let measuredAt: Date
     let displayMode: UsageDisplayMode
 
     var body: some View {
@@ -536,7 +577,7 @@ private struct QuotaGrid: View {
             ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                 HStack(spacing: 0) {
                     ForEach(row) { window in
-                        QuotaTile(window: window, displayMode: displayMode)
+                        QuotaTile(window: window, measuredAt: measuredAt, displayMode: displayMode)
                     }
                 }
             }
@@ -676,12 +717,18 @@ private struct AdditionalCreditsRow: View {
 
 private struct QuotaTile: View {
     let window: QuotaWindow
+    let measuredAt: Date
     let displayMode: UsageDisplayMode
 
     @Environment(\.usagePanelVisible) private var isPanelVisible
 
     var body: some View {
         TimelineView(UsageMinuteSchedule(isActive: isPanelVisible)) { context in
+            let timing = QuotaTimingPresentation(
+                window: window,
+                measuredAt: measuredAt,
+                now: context.date
+            )
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .firstTextBaseline, spacing: 3) {
                     Text(window.kind.title)
@@ -782,11 +829,12 @@ private struct QuotaTile: View {
 
                 let countText = window.countText(for: displayMode) ?? window.trailingDetail
                 let subtext = window.isInactive ? window.inactiveDetail : nil
-                if window.resetsAt != nil || countText != nil || subtext != nil {
+                if timing.text != nil || countText != nil || subtext != nil {
                     QuotaFooter(
-                        reset: window.resetsAt.map { resetText($0, relativeTo: context.date) },
+                        reset: timing.text,
                         note: subtext,
-                        count: countText
+                        count: countText,
+                        isAtRisk: timing.isAtRisk
                     )
                 }
             }
@@ -795,7 +843,7 @@ private struct QuotaTile: View {
             .frame(maxWidth: .infinity, minHeight: 53, alignment: .topLeading)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(window.kind.title)
-            .accessibilityValue(accessibilityValue(relativeTo: context.date))
+            .accessibilityValue(accessibilityValue(timing))
         }
     }
 
@@ -821,14 +869,7 @@ private struct QuotaTile: View {
         }
     }
 
-    private func resetText(_ date: Date, relativeTo now: Date) -> String {
-        guard let countdown = CompactCountdown.text(until: date, from: now) else {
-            return "Resetting"
-        }
-        return "Reset \(countdown)"
-    }
-
-    private func accessibilityValue(relativeTo now: Date) -> String {
+    private func accessibilityValue(_ timing: QuotaTimingPresentation) -> String {
         if window.isUnlimited {
             return "Unlimited"
         }
@@ -845,7 +886,7 @@ private struct QuotaTile: View {
         }
         var values = [usage]
         if let count = window.countText(for: displayMode) ?? window.trailingDetail { values.append(count) }
-        if let reset = window.resetsAt { values.append(resetText(reset, relativeTo: now)) }
+        if let timingText = timing.accessibilityText { values.append(timingText) }
         return values.joined(separator: ", ")
     }
 }
@@ -855,14 +896,18 @@ struct QuotaFooter: View {
     let reset: String?
     let note: String?
     let count: String?
+    var isAtRisk: Bool = false
 
     private var hasLeading: Bool { reset != nil || note != nil }
 
     @ViewBuilder private var leading: some View {
         if let reset {
             HStack(spacing: 5) {
-                Image(systemName: "clock").foregroundStyle(.tertiary)
+                Image(systemName: isAtRisk ? "hourglass" : "clock")
+                    .foregroundStyle(isAtRisk ? AnyShapeStyle(UsagePalette.warning) : AnyShapeStyle(.tertiary))
                 Text(reset)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
             }
         } else if let note { Text(note) }
     }

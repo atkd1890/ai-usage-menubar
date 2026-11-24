@@ -18,6 +18,11 @@ actor CursorProvider: UsageProvider {
     private let dateProvider: DateProviding
     private let identity: AccountIdentityClient?
     private let identityCache = AccountIdentityCache(provider: .cursor, source: "desktop")
+    /// An access token renewed with the Cursor CLI's refresh token. It is
+    /// kept in memory only, for as long as that refresh token is the stored
+    /// one, so the CLI's Keychain items are never written and the token is
+    /// not renewed again on every refresh.
+    private var renewedCLIToken: (accessToken: String, refreshToken: String)?
 
     init(
         authStore: CursorAuthStore = CursorAuthStore(),
@@ -38,33 +43,33 @@ actor CursorProvider: UsageProvider {
                 "Not logged in. Sign in through Cursor."
             )
         }
+        if auth.source == .keychain,
+           authStore.needsRefresh(auth.accessToken),
+           let renewed = renewedCLIToken,
+           renewed.refreshToken == auth.refreshToken {
+            auth.accessToken = renewed.accessToken
+        }
         if authStore.needsRefresh(auth.accessToken) {
             try await refresh(&auth)
         }
         guard var token = auth.accessToken else {
-            throw ProviderFailure(
-                .authentication,
-                "Cursor session expired. Sign in again."
-            )
+            throw Self.expiredSession(auth.source)
         }
 
         var usage = try await requestUsage(token)
         if usage.statusCode == 401 || usage.statusCode == 403 {
             try await refresh(&auth)
             guard let refreshed = auth.accessToken else {
-                throw ProviderFailure(
-                    .authentication,
-                    "Cursor session expired. Sign in again."
-                )
+                throw Self.expiredSession(auth.source)
             }
             token = refreshed
             usage = try await requestUsage(token)
         }
         if usage.statusCode == 401 || usage.statusCode == 403 {
-            throw ProviderFailure(
-                .authentication,
-                "Cursor session expired. Sign in again."
-            )
+            if auth.source == .keychain {
+                renewedCLIToken = nil
+            }
+            throw Self.expiredSession(auth.source)
         }
         if usage.statusCode == 429 {
             throw ProviderFailure(
@@ -115,12 +120,31 @@ actor CursorProvider: UsageProvider {
         }
     }
 
-    private func refresh(_ auth: inout CursorAuthState) async throws {
-        guard let refreshToken = auth.refreshToken else {
-            throw ProviderFailure(
+    /// Signing in to the editor again does not renew the Cursor CLI's login,
+    /// so an expired CLI session names the command that does.
+    private static func expiredSession(
+        _ source: CursorAuthState.Source
+    ) -> ProviderFailure {
+        switch source {
+        case .sqlite, .sqliteEncrypted:
+            ProviderFailure(
                 .authentication,
                 "Cursor session expired. Sign in again."
             )
+        case .keychain:
+            ProviderFailure(
+                .authentication,
+                "Cursor CLI session expired. Run `agent login`."
+            )
+        }
+    }
+
+    private func refresh(_ auth: inout CursorAuthState) async throws {
+        guard let refreshToken = auth.refreshToken else {
+            if auth.source == .keychain {
+                renewedCLIToken = nil
+            }
+            throw Self.expiredSession(auth.source)
         }
         let response: HTTPResponse
         do {
@@ -138,21 +162,26 @@ actor CursorProvider: UsageProvider {
               ),
               decoded.shouldLogout != true,
               !decoded.accessToken.isEmpty else {
-            throw ProviderFailure(
-                .authentication,
-                "Cursor session expired. Sign in again."
-            )
+            if auth.source == .keychain {
+                renewedCLIToken = nil
+            }
+            throw Self.expiredSession(auth.source)
         }
-        do {
-            try authStore.saveAccessToken(
-                decoded.accessToken,
-                source: auth.source
-            )
-        } catch {
-            throw ProviderFailure(
-                .storage,
-                "Cursor session could not be saved."
-            )
+        switch auth.source {
+        case .sqlite, .sqliteEncrypted:
+            do {
+                try authStore.saveAccessToken(
+                    decoded.accessToken,
+                    source: auth.source
+                )
+            } catch {
+                throw ProviderFailure(
+                    .storage,
+                    "Cursor session could not be saved."
+                )
+            }
+        case .keychain:
+            renewedCLIToken = (decoded.accessToken, refreshToken)
         }
         auth.accessToken = decoded.accessToken
     }

@@ -52,6 +52,15 @@ actor ClaudeProvider: UsageProvider {
                 return try await probe(candidate, generation: &generation)
             } catch ClaudeProviderError.credentialsChanged where credentialReloadsRemaining > 0 {
                 return try await fetch(credentialReloadsRemaining: credentialReloadsRemaining - 1)
+            } catch ClaudeProviderError.credentialsChanged {
+                // The stored login changed again after the reload. The other
+                // candidates were loaded before that change, so probing them
+                // could not publish a reading, and refreshing one would
+                // rotate a token that could not be saved.
+                throw ProviderFailure(
+                    .transient,
+                    "Claude's login changed while refreshing. Try again."
+                )
             } catch let failure as ProviderFailure where failure.kind == .authentication {
                 lastAuthenticationFailure = failure
                 continue
@@ -107,6 +116,9 @@ actor ClaudeProvider: UsageProvider {
             accessToken: accessToken,
             includingResetGrants: readsResetGrants
         )
+        if let blocked = Self.organizationBlockFailure(response) {
+            throw blocked
+        }
         if response.statusCode == 401 || response.statusCode == 403 {
             guard let refreshToken = nonEmpty(state.oauth.refreshToken) else {
                 throw ProviderFailure(
@@ -126,6 +138,9 @@ actor ClaudeProvider: UsageProvider {
                 accessToken: refreshedToken,
                 includingResetGrants: readsResetGrants
             )
+            if let blocked = Self.organizationBlockFailure(response) {
+                throw blocked
+            }
             if response.statusCode == 401 || response.statusCode == 403 {
                 throw ProviderFailure(
                     .authentication,
@@ -178,6 +193,24 @@ actor ClaudeProvider: UsageProvider {
             return snapshot.withCredential(source: "Claude Code OAuth", account: email, email: email)
         }
         return snapshot
+    }
+
+    /// A `403` that names the organization's own setting. Signing in again or
+    /// renewing the token cannot change it, so it is reported as it is.
+    static func organizationBlockFailure(_ response: HTTPResponse) -> ProviderFailure? {
+        guard response.statusCode == 403,
+              let body = try? ProviderParsing.object(from: response.body),
+              let error = ProviderParsing.object(body["error"]),
+              let details = ProviderParsing.object(error["details"]),
+              ProviderParsing.string(details["error_code"]) == "oauth_not_allowed_for_organization"
+        else {
+            return nil
+        }
+        return ProviderFailure(
+            .authentication,
+            "This Claude organization doesn't allow OAuth sign-ins, " +
+                "so its usage can't be read."
+        )
     }
 
     /// Five minutes, doubling with each consecutive limit, up to an hour.

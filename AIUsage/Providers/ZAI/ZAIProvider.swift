@@ -99,7 +99,25 @@ actor ZAIProvider: UsageProvider {
                 let percent = reportedPercent ?? ((total ?? 0) > 0 && used != nil ? used! / total! * 100 : nil)
                 if let percent, (0...100).contains(percent) {
                     let validCounts = total != nil && total! > 0 && used != nil && (0...total!).contains(used!)
-                    windows.append(QuotaWindow(kind: kind, usedPercent: percent, resetsAt: Self.date(limit["nextResetTime"]), remainingCount: validCounts ? total! - used! : nil, limitCount: validCounts ? total : nil))
+                    let reset = Self.date(limit["nextResetTime"])
+                    let windowLength: TimeInterval? = {
+                        guard ["TOKENS_LIMIT", "CREDIT_LIMIT"].contains(type),
+                              let unit, let number, number > 0 else { return nil }
+                        switch unit {
+                        case 3: return number * 3_600
+                        case 4: return number * 86_400
+                        case 6: return number * 7 * 86_400
+                        default: return nil
+                        }
+                    }()
+                    windows.append(QuotaWindow(
+                        kind: kind,
+                        usedPercent: percent,
+                        resetsAt: reset,
+                        startsAt: windowLength.flatMap { ProviderParsing.windowStart(endingAt: reset, length: $0) },
+                        remainingCount: validCounts ? total! - used! : nil,
+                        limitCount: validCounts ? total : nil
+                    ))
                 } else if let remaining = QuotaDiscovery.number(limit["remaining"]), remaining >= 0 {
                     details.append(ProviderUsageDetail(id: "zai." + suffix + ".remaining", title: QuotaDiscovery.name(type), value: QuotaWindow.formatCount(remaining) + " left"))
                 } else { details.append(QuotaDiscovery.notice("zai." + suffix)) }

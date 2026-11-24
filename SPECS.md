@@ -18,6 +18,8 @@ Behavior and provider contracts for the personal fork. Read the relevant section
 - Cards start collapsed (first quota row only); chevron expands secondary rows, consumption share, resets, Additional Usage/Credits.
 - Severity colors are shared by panel and menu bar: normal < 60% used, orange 60–85%, red ≥ 85% (`UsageSeverity`).
 - Left/Used mode never inverts share charts.
+- Sessions shorter than 24 hours with a known `startsAt` and `resetsAt` (after ≥ 10% elapsed, `0 < usedPercent < 100`, `measuredAt < resetsAt`, and `now < resetsAt`) show an `"Out <countdown>"` pace estimate and hourglass icon on the tile and an hourglass on the menu bar when linear pace predicts exhaustion before reset; stale (`⚠︎`) takes precedence over the hourglass on the menu bar.
+- When Sparkle detects a newer upstream version, the panel footer displays passive informational text (`Upstream <version>`) with no interactive Update button or in-app update action.
 - Use semantic system colors and solid backgrounds; preserve accessibility labels.
 
 ### Native window and settings behavior
@@ -116,6 +118,7 @@ Current summary/detail conventions live in `ProviderDetailsLayout`: Claude, Code
 - Login methods (default first): CLI OAuth; Claude desktop; Edge; Chrome.
 - Credential source: Keychain `Claude Code-credentials` / `~/.claude/.credentials.json`; desktop/browser `sessionKey*` cookies.
 - Read-only endpoints: `api.anthropic.com/api/oauth/usage` (`?cedar_ember=1` hourly for reset grants); `claude.ai/api/organizations/{id}/usage`.
+- Auth behavior: HTTP `403` with `error.details.error_code == "oauth_not_allowed_for_organization"` skips token refresh and reports an authentication failure; if stored credentials change twice during one refresh, fail transiently immediately without probing stale candidates.
 - Data families: Session, weekly, Sonnet/Fable and discovered scoped/model quotas; consumed usage by Code/Chat/Cowork; banked/usable resets and expiry; extra spend, monthly cap, enablement.
 
 ### Codex
@@ -130,7 +133,8 @@ Current summary/detail conventions live in `ProviderDetailsLayout`: Claude, Code
 
 - Region: US.
 - Login methods (default first): Cursor desktop; Edge; Chrome.
-- Credential source: Cursor `state.vscdb` (safeStorage `v10`, `Cursor Safe Storage`); `WorkosCursorSessionToken`.
+- Credential source: Cursor `state.vscdb` (safeStorage `v10`, `Cursor Safe Storage`), Cursor CLI Keychain (`cursor-access-token` / `cursor-refresh-token`); `WorkosCursorSessionToken`.
+- Auth behavior: Access tokens renewed from Cursor CLI Keychain items are cached in memory per `refreshToken` and never written back to the CLI Keychain; expired CLI sessions prompt `agent login`.
 - Read-only endpoints: `api2.cursor.sh` DashboardService RPCs; `cursor.com/api/dashboard/v2/usage-status`, `get-sand-usage-status`.
 - Data families: Legacy Total/Auto/API quotas or shared weekly pool; consumed share by Cursor/Grok Chat/Grok Tasks; additional spend/cap/enablement, prepaid monetary balance.
 

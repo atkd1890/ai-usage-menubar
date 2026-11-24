@@ -116,15 +116,12 @@ struct DashboardView: View {
             Spacer()
 
             if let version = availableUpdateVersion {
-                Button(action: checkForUpdates) {
-                    Label("Update", systemImage: "arrow.down.circle.fill")
-                        .foregroundStyle(.white)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(UsagePalette.accent)
-                .controlSize(.small)
-                .disabled(isCheckingForUpdates)
-                .help("Update AI Usage to \(version)")
+                Text("Upstream \(version)")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(UsagePalette.accent)
+                    .lineLimit(1)
+                    .help("Upstream AI Usage \(version) is available. Local fork builds do not auto-update.")
+                    .accessibilityLabel("Upstream version \(version) available")
             }
 
             HStack(spacing: 0) {

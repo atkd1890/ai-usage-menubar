@@ -86,6 +86,85 @@ final class CursorSafeStorageTests: XCTestCase {
         XCTAssertFalse(db.writes[0].contains("refreshed-token"))
     }
 
+    func testCLIRefreshKeepsTokenInMemoryWithoutWritingKeychain() async throws {
+        let validJWT = "header.eyJleHAiOjQxMDI0NDQ4MDB9.signature"
+        let secondValidJWT = "header.eyJleHAiOjQxMDI0NDQ4MDF9.signature"
+        let keychain = WriteRejectingCursorKeychain(generic: [
+            CursorAuthStore.accessTokenService: "expired-cli-token",
+            CursorAuthStore.refreshTokenService: "cli-refresh-1"
+        ])
+        let http = MockHTTPClient([
+            httpResponse(json: "{\"access_token\":\"\(validJWT)\"}"),
+            httpResponse(json: "{\"enabled\":true,\"planUsage\":{\"totalPercentUsed\":15}}"),
+            httpResponse(json: "{\"planInfo\":{\"planName\":\"Pro\"}}"),
+            // Second fetch reuses renewedCLIToken in memory without refreshing
+            httpResponse(json: "{\"enabled\":true,\"planUsage\":{\"totalPercentUsed\":20}}"),
+            httpResponse(json: "{\"planInfo\":{\"planName\":\"Pro\"}}"),
+            // Third fetch sees a changed refreshToken -> refreshes again
+            httpResponse(json: "{\"access_token\":\"\(secondValidJWT)\"}"),
+            httpResponse(json: "{\"enabled\":true,\"planUsage\":{\"totalPercentUsed\":25}}"),
+            httpResponse(json: "{\"planInfo\":{\"planName\":\"Pro\"}}")
+        ])
+        let provider = CursorProvider(
+            authStore: CursorAuthStore(sqlite: CursorTestSQLite(), keychain: keychain),
+            client: CursorUsageClient(http: http)
+        )
+
+        let first = try await provider.fetch()
+        XCTAssertEqual(first.windows.first?.usedPercent, 15)
+
+        let second = try await provider.fetch()
+        XCTAssertEqual(second.windows.first?.usedPercent, 20)
+
+        keychain.setGeneric(service: CursorAuthStore.refreshTokenService, value: "cli-refresh-2")
+        let third = try await provider.fetch()
+        XCTAssertEqual(third.windows.first?.usedPercent, 25)
+
+        let requests = await http.capturedRequests()
+        let refreshCalls = requests.filter { $0.url.absoluteString.contains("oauth/token") }
+        XCTAssertEqual(refreshCalls.count, 2)
+    }
+
+    func testExpiredCLISessionPromptsAgentLogin() async {
+        let noRefreshKeychain = WriteRejectingCursorKeychain(generic: [
+            CursorAuthStore.accessTokenService: "expired-cli-token"
+        ])
+        let providerNoRefresh = CursorProvider(
+            authStore: CursorAuthStore(sqlite: CursorTestSQLite(), keychain: noRefreshKeychain),
+            client: CursorUsageClient(http: MockHTTPClient([]))
+        )
+        do {
+            _ = try await providerNoRefresh.fetch()
+            XCTFail("Expected Cursor CLI session expired error")
+        } catch let failure as ProviderFailure {
+            XCTAssertEqual(failure.kind, .authentication)
+            XCTAssertEqual(failure.message, "Cursor CLI session expired. Run `agent login`.")
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+
+        let failingKeychain = WriteRejectingCursorKeychain(generic: [
+            CursorAuthStore.accessTokenService: "expired-cli-token",
+            CursorAuthStore.refreshTokenService: "expired-refresh"
+        ])
+        let http = MockHTTPClient([
+            httpResponse(401, json: "{\"shouldLogout\":true}")
+        ])
+        let providerFailedRefresh = CursorProvider(
+            authStore: CursorAuthStore(sqlite: CursorTestSQLite(), keychain: failingKeychain),
+            client: CursorUsageClient(http: http)
+        )
+        do {
+            _ = try await providerFailedRefresh.fetch()
+            XCTFail("Expected Cursor CLI session expired error")
+        } catch let failure as ProviderFailure {
+            XCTAssertEqual(failure.kind, .authentication)
+            XCTAssertEqual(failure.message, "Cursor CLI session expired. Run `agent login`.")
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
     private func keychain() -> MemoryKeychain {
         MemoryKeychain(generic: [CursorTokenCodec.keychainService: password])
     }
@@ -117,4 +196,31 @@ private struct DeniedCursorKeychain: KeychainAccessing {
     func writeGenericPassword(service: String, value: String) throws { throw KeychainError.writeFailed }
     func readGenericPasswordForCurrentUser(service: String) throws -> String? { throw KeychainError.readFailed }
     func writeGenericPasswordForCurrentUser(service: String, value: String) throws { throw KeychainError.writeFailed }
+}
+
+private final class WriteRejectingCursorKeychain: KeychainAccessing, @unchecked Sendable {
+    private let lock = NSLock()
+    private var generic: [String: String]
+
+    init(generic: [String: String] = [:]) {
+        self.generic = generic
+    }
+
+    func setGeneric(service: String, value: String) {
+        lock.withLock { generic[service] = value }
+    }
+
+    func readGenericPassword(service: String) throws -> String? {
+        lock.withLock { generic[service] }
+    }
+
+    func writeGenericPassword(service: String, value: String) throws {
+        throw KeychainError.writeFailed
+    }
+
+    func readGenericPasswordForCurrentUser(service: String) throws -> String? { nil }
+
+    func writeGenericPasswordForCurrentUser(service: String, value: String) throws {
+        throw KeychainError.writeFailed
+    }
 }

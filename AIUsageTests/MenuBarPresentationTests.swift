@@ -303,4 +303,66 @@ final class MenuBarPresentationTests: XCTestCase {
 
         XCTAssertLessThan(image.size.width, legacyWidth - 15)
     }
+
+    @MainActor
+    func testRiskIndicatorSetsAccessibilityLabelAndStaleTakesPrecedenceInImage() {
+        let font = NSFont.menuBarFont(ofSize: 0)
+        let base = MenuBarReading(
+            provider: .claude,
+            metric: .session,
+            value: .percentage(80),
+            displayMode: .used,
+            isStale: false,
+            isAtRisk: false
+        )
+        let atRisk = MenuBarReading(
+            provider: .claude,
+            metric: .session,
+            value: .percentage(80),
+            displayMode: .used,
+            isStale: false,
+            isAtRisk: true
+        )
+        let staleAndAtRisk = MenuBarReading(
+            provider: .claude,
+            metric: .session,
+            value: .percentage(80),
+            displayMode: .used,
+            isStale: true,
+            isAtRisk: true
+        )
+
+        XCTAssertFalse(MenuBarPresentation(reading: base).showsRiskIndicator)
+        let riskPresentation = MenuBarPresentation(reading: atRisk)
+        XCTAssertTrue(riskPresentation.showsRiskIndicator)
+        XCTAssertTrue(riskPresentation.accessibilityLabel.contains("runs out before reset at this pace"))
+
+        let baseImage = MenuBarStatusImageRenderer.image(
+            for: [MenuBarProviderReadings(provider: .claude, selectedMetrics: [.session], readings: [base])],
+            font: font
+        )
+        let riskImage = MenuBarStatusImageRenderer.image(
+            for: [MenuBarProviderReadings(provider: .claude, selectedMetrics: [.session], readings: [atRisk])],
+            font: font
+        )
+        XCTAssertGreaterThan(riskImage.size.width, baseImage.size.width)
+
+        let staleOnly = MenuBarReading(
+            provider: .claude,
+            metric: .session,
+            value: .percentage(80),
+            displayMode: .used,
+            isStale: true,
+            isAtRisk: false
+        )
+        let staleOnlyImage = MenuBarStatusImageRenderer.image(
+            for: [MenuBarProviderReadings(provider: .claude, selectedMetrics: [.session], readings: [staleOnly])],
+            font: font
+        )
+        let staleRiskImage = MenuBarStatusImageRenderer.image(
+            for: [MenuBarProviderReadings(provider: .claude, selectedMetrics: [.session], readings: [staleAndAtRisk])],
+            font: font
+        )
+        XCTAssertEqual(staleRiskImage.size.width, staleOnlyImage.size.width)
+    }
 }

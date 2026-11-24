@@ -613,6 +613,8 @@ struct QuotaWindow: Identifiable, Equatable, Sendable {
     let kind: QuotaKind
     let usedPercent: Double
     let resetsAt: Date?
+    /// When the window began, from the provider or its known length.
+    let startsAt: Date?
     let remainingCount: Double?
     let limitCount: Double?
     let series: [QuotaSeriesReading]
@@ -621,10 +623,16 @@ struct QuotaWindow: Identifiable, Equatable, Sendable {
     let isUnlimited: Bool
     let trailingDetail: String?
 
+    /// The share of a window that has to pass before its pace is trusted.
+    static let minimumElapsedFraction = 0.1
+    /// A window this long or longer has no forecast.
+    static let forecastLengthLimit: TimeInterval = 24 * 60 * 60
+
     init(
         kind: QuotaKind,
         usedPercent: Double,
         resetsAt: Date?,
+        startsAt: Date? = nil,
         remainingCount: Double? = nil,
         limitCount: Double? = nil,
         series: [QuotaSeriesReading] = [],
@@ -636,6 +644,7 @@ struct QuotaWindow: Identifiable, Equatable, Sendable {
         self.kind = kind
         self.usedPercent = usedPercent
         self.resetsAt = resetsAt
+        self.startsAt = startsAt
         self.series = series
         self.isInactive = isInactive
         self.inactiveDetail = inactiveDetail
@@ -654,6 +663,25 @@ struct QuotaWindow: Identifiable, Equatable, Sendable {
     var id: QuotaKind { kind }
     var isBoundedActive: Bool { !isInactive && !isUnlimited }
     var renderedFraction: Double { min(max(usedPercent / 100, 0), 1) }
+
+    /// When a session runs out at its average pace since it started,
+    /// measured when `usedPercent` was read; `nil` unless that comes before
+    /// the reset, and for every window of a day or longer.
+    func projectedExhaustion(measuredAt: Date) -> Date? {
+        guard isBoundedActive,
+              series.count < 2,
+              let start = startsAt, let reset = resetsAt,
+              usedPercent > 0, usedPercent < 100,
+              start < measuredAt, measuredAt < reset else { return nil }
+        let length = reset.timeIntervalSince(start)
+        guard length < Self.forecastLengthLimit else { return nil }
+        let elapsed = measuredAt.timeIntervalSince(start)
+        guard elapsed >= length * Self.minimumElapsedFraction else { return nil }
+        let exhaustion = measuredAt.addingTimeInterval(
+            (100 - usedPercent) * elapsed / usedPercent
+        )
+        return exhaustion < reset ? exhaustion : nil
+    }
 
     func countText(for displayMode: UsageDisplayMode) -> String? {
         guard let remainingCount, let limitCount, limitCount > 0 else { return nil }
@@ -1058,6 +1086,14 @@ struct ProviderSnapshot: Equatable, Sendable {
             return windows.first { $0.kind == .monthly || $0.kind == .totalUsage }
         }
         return windows.first { $0.kind == quotaKind }
+    }
+
+    /// The metric's session runs out before its reset at its current pace,
+    /// and that reset is still ahead of `now`.
+    func isAtRisk(_ metric: MenuBarMetricID, now: Date) -> Bool {
+        guard let window = window(for: metric),
+              let reset = window.resetsAt, now < reset else { return false }
+        return window.projectedExhaustion(measuredAt: fetchedAt) != nil
     }
 
     var availableMenuBarItems: [MenuBarItemID] {

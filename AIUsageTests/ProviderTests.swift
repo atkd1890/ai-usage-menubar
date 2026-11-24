@@ -179,4 +179,139 @@ final class ProviderTests: XCTestCase {
         XCTAssertEqual(savedAuth.tokens?.accessToken, "new-access")
         XCTAssertEqual(savedAuth.tokens?.refreshToken, "new-refresh")
     }
+
+    func testClaudeOrganizationOAuthBlockSkipsRefreshAndReportsWhy() async {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let oauth = ClaudeOAuth(
+            accessToken: "access",
+            refreshToken: "refresh",
+            expiresAt: (now.timeIntervalSince1970 + 3_600) * 1_000,
+            subscriptionType: nil,
+            rateLimitTier: nil,
+            scopes: ["user:profile"]
+        )
+        let keychain = MemoryKeychain(currentUser: [
+            "Claude Code-credentials":
+                encodedJSON(ClaudeCredentialsDocument(claudeAiOauth: oauth))
+        ])
+        let http = MockHTTPClient([
+            httpResponse(
+                403,
+                json: """
+                {
+                  "error": {
+                    "details": {
+                      "error_code": "oauth_not_allowed_for_organization"
+                    }
+                  }
+                }
+                """
+            )
+        ])
+        let date = FixedDateProvider(value: now)
+        let provider = ClaudeProvider(
+            authStore: ClaudeAuthStore(
+                environment: MockEnvironment(),
+                files: MemoryFiles(),
+                keychain: keychain,
+                dateProvider: date
+            ),
+            client: ClaudeUsageClient(http: http),
+            dateProvider: date
+        )
+
+        do {
+            _ = try await provider.fetch()
+            XCTFail("Expected organization OAuth block failure")
+        } catch let failure as ProviderFailure {
+            XCTAssertEqual(failure.kind, .authentication)
+            XCTAssertEqual(
+                failure.message,
+                "This Claude organization doesn't allow OAuth sign-ins, so its usage can't be read."
+            )
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+
+        let requests = await http.capturedRequests()
+        XCTAssertEqual(requests.count, 1)
+    }
+
+    func testClaudeStopsAfterSecondCredentialChangeWithoutProbingStaleCandidates() async {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        @Sendable func oauth(token: String, expiresAtOffset: TimeInterval = 3_600) -> ClaudeOAuth {
+            ClaudeOAuth(
+                accessToken: token,
+                refreshToken: "refresh-\(token)",
+                expiresAt: (now.timeIntervalSince1970 + expiresAtOffset) * 1_000,
+                subscriptionType: "pro",
+                rateLimitTier: nil,
+                scopes: ["user:profile"]
+            )
+        }
+
+        let keychain = MemoryKeychain(currentUser: [
+            "Claude Code-credentials":
+                encodedJSON(ClaudeCredentialsDocument(claudeAiOauth: oauth(token: "kc-1")))
+        ])
+        // Second candidate whose token needs refresh: if probed after the second
+        // generation change, it would trigger a refresh request.
+        let files = MemoryFiles([
+            "~/.claude/.credentials.json":
+                encodedJSON(ClaudeCredentialsDocument(claudeAiOauth: oauth(token: "file-stale", expiresAtOffset: 60)))
+        ])
+        let http = MutatingHTTPClient { index, _ in
+            let nextToken = "kc-\(index + 2)"
+            try? keychain.writeGenericPasswordForCurrentUser(
+                service: "Claude Code-credentials",
+                value: encodedJSON(ClaudeCredentialsDocument(claudeAiOauth: oauth(token: nextToken)))
+            )
+            return httpResponse(json: """
+            {"five_hour": {"utilization": 12, "resets_at": 1800003600}}
+            """)
+        }
+        let date = FixedDateProvider(value: now)
+        let provider = ClaudeProvider(
+            authStore: ClaudeAuthStore(
+                environment: MockEnvironment(),
+                files: files,
+                keychain: keychain,
+                dateProvider: date
+            ),
+            client: ClaudeUsageClient(http: http),
+            dateProvider: date
+        )
+
+        do {
+            _ = try await provider.fetch()
+            XCTFail("Expected transient credentialsChanged failure")
+        } catch let failure as ProviderFailure {
+            XCTAssertEqual(failure.kind, .transient)
+            XCTAssertEqual(failure.message, "Claude's login changed while refreshing. Try again.")
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+
+        let requests = await http.capturedRequests()
+        XCTAssertEqual(requests.count, 2)
+    }
+}
+
+private actor MutatingHTTPClient: HTTPClient {
+    private let handler: @Sendable (Int, HTTPRequest) -> HTTPResponse
+    private var requests: [HTTPRequest] = []
+
+    init(handler: @escaping @Sendable (Int, HTTPRequest) -> HTTPResponse) {
+        self.handler = handler
+    }
+
+    func send(_ request: HTTPRequest) async throws -> HTTPResponse {
+        let index = requests.count
+        requests.append(request)
+        return handler(index, request)
+    }
+
+    func capturedRequests() -> [HTTPRequest] {
+        requests
+    }
 }

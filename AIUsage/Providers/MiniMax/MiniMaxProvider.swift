@@ -769,7 +769,8 @@ actor MiniMaxProvider: UsageProvider {
                         windows.append(QuotaWindow(
                             kind: .session,
                             usedPercent: pct,
-                            resetsAt: ProviderParsing.date(primary["end_time"])
+                            resetsAt: ProviderParsing.date(primary["end_time"]),
+                            startsAt: ProviderParsing.date(primary["start_time"])
                         ))
                     }
 
@@ -782,7 +783,8 @@ actor MiniMaxProvider: UsageProvider {
                         windows.append(QuotaWindow(
                             kind: .weekly,
                             usedPercent: pct,
-                            resetsAt: ProviderParsing.date(primary["weekly_end_time"])
+                            resetsAt: ProviderParsing.date(primary["weekly_end_time"]),
+                            startsAt: ProviderParsing.date(primary["weekly_start_time"])
                         ))
                     }
                 }
@@ -803,6 +805,7 @@ actor MiniMaxProvider: UsageProvider {
                         kind: .additional(id: "minimax.video", title: "Video"),
                         usedPercent: min(max((used / total) * 100, 0), 100),
                         resetsAt: ProviderParsing.date(video["end_time"]),
+                        startsAt: ProviderParsing.date(video["start_time"]),
                         remainingCount: remaining,
                         limitCount: total
                     ))

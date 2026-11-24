@@ -162,6 +162,40 @@ final class VisualSnapshotTests: XCTestCase {
         XCTAssertGreaterThan(size.height, 250)
     }
 
+    func testFooterShowsUpstreamNoticeTextWithoutInteractiveUpdateButton() async {
+        let store = await makePopulatedStore()
+        var triggeredUpdate = false
+        let footer = DashboardView(
+            store: store,
+            launchAtLogin: LaunchAtLoginController(service: SnapshotLoginService()),
+            usageDisplayMode: .constant(.used),
+            refreshInterval: .constant(.fiveMinutes),
+            availableUpdateVersion: "0.5.0",
+            isCheckingForUpdates: false,
+            checkForUpdates: { triggeredUpdate = true },
+            section: .footer
+        )
+        let controller = NSHostingController(rootView: footer)
+        let size = controller.sizeThatFits(in: CGSize(width: panelWidth, height: .greatestFiniteMagnitude))
+        XCTAssertEqual(size.width, panelWidth, accuracy: 0.5)
+        XCTAssertGreaterThan(size.height, 20)
+
+        controller.view.frame = NSRect(origin: .zero, size: size)
+        controller.view.layoutSubtreeIfNeeded()
+
+        func allButtons(in view: NSView) -> [NSButton] {
+            var buttons: [NSButton] = []
+            if let button = view as? NSButton { buttons.append(button) }
+            for subview in view.subviews { buttons += allButtons(in: subview) }
+            return buttons
+        }
+
+        let buttons = allButtons(in: controller.view)
+        XCTAssertFalse(buttons.contains { $0.title.localizedCaseInsensitiveContains("Update") })
+        XCTAssertFalse(buttons.contains { ($0.toolTip ?? "").localizedCaseInsensitiveContains("Update AI Usage") })
+        XCTAssertFalse(triggeredUpdate)
+    }
+
     func testSettingsShowsIndependentProvidersInLightAndDark() async {
         let store = await makeFullyPopulatedStore()
         let suiteName = "VisualSnapshotTests.\(UUID().uuidString)"

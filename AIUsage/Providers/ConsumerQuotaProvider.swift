@@ -371,23 +371,33 @@ actor ConsumerQuotaProvider: UsageProvider {
                 for row in value["usages"] as? [[String: Any]] ?? [] {
                     guard let scope = row["scope"] as? String else { continue }
                     let name = QuotaDiscovery.name(scope.replacingOccurrences(of: "FEATURE_", with: ""))
-                    var entries: [(String, String, [String: Any])] = []
-                    if let detail = row["detail"] as? [String: Any] { entries.append(("total", name + " quota", detail)) }
+                    var entries: [(String, String, [String: Any], TimeInterval?)] = []
+                    if let detail = row["detail"] as? [String: Any] { entries.append(("total", name + " quota", detail, nil)) }
                     for limit in row["limits"] as? [[String: Any]] ?? [] {
                         guard let window = limit["window"] as? [String: Any], let duration = number(window["duration"]),
                               let unit = window["timeUnit"] as? String, let detail = limit["detail"] as? [String: Any] else { continue }
-                        entries.append(("\(duration).\(unit)", name + " · \(duration.formatted()) " + unit.replacingOccurrences(of: "TIME_UNIT_", with: "").lowercased(), detail))
+                        let unitSeconds: TimeInterval? = switch unit {
+                        case "TIME_UNIT_MINUTE": 60
+                        case "TIME_UNIT_HOUR": 3_600
+                        case "TIME_UNIT_DAY": 86_400
+                        case "TIME_UNIT_WEEK": 604_800
+                        default: nil
+                        }
+                        let length = unitSeconds.flatMap { duration > 0 ? duration * $0 : nil }
+                        entries.append(("\(duration).\(unit)", name + " · \(duration.formatted()) " + unit.replacingOccurrences(of: "TIME_UNIT_", with: "").lowercased(), detail, length))
                     }
-                    for (suffix, title, detail) in entries {
+                    for (suffix, title, detail, length) in entries {
                         let id = "kimi.code." + scope + "." + suffix
                         if let maximum = number(detail["limit"]), maximum > 0,
                            let remaining = number(detail["remaining"]), (0...maximum).contains(remaining) {
                             let kind = QuotaKind.additional(id: id, title: title)
                             if !windows.contains(where: { $0.kind == kind }) {
+                                let reset = date(detail["resetTime"])
                                 windows.append(QuotaWindow(
                                     kind: kind,
                                     usedPercent: (maximum - remaining) / maximum * 100,
-                                    resetsAt: date(detail["resetTime"]),
+                                    resetsAt: reset,
+                                    startsAt: length.flatMap { ProviderParsing.windowStart(endingAt: reset, length: $0) },
                                     remainingCount: remaining,
                                     limitCount: maximum
                                 ))

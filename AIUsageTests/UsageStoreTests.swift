@@ -564,6 +564,50 @@ final class UsageStoreTests: XCTestCase {
         store.stop()
     }
 
+    @MainActor
+    func testMenuBarReadingsMarkAtRiskSessionsAndClearPastReset() async {
+        let now = Date()
+        let start = now.addingTimeInterval(-2 * 3_600)
+        let reset = now.addingTimeInterval(3 * 3_600)
+        let provider = SequencedProvider(
+            id: .claude,
+            results: [.success(ProviderSnapshot(
+                provider: .claude,
+                planName: "Max",
+                windows: [
+                    QuotaWindow(
+                        kind: .session,
+                        usedPercent: 80,
+                        resetsAt: reset,
+                        startsAt: start
+                    ),
+                    QuotaWindow(
+                        kind: .weekly,
+                        usedPercent: 80,
+                        resetsAt: now.addingTimeInterval(5 * 86_400),
+                        startsAt: now.addingTimeInterval(-2 * 86_400)
+                    )
+                ],
+                fetchedAt: now
+            ))]
+        )
+        let store = UsageStore(
+            providers: [provider],
+            availabilityChecker: FixedProviderAvailabilityChecker(installed: [.claude]),
+            trackedProviderIDs: [.claude]
+        )
+
+        await store.refresh()
+
+        let readings = store.menuBarReadings(
+            for: [
+                MenuBarItemID(provider: .claude, metric: .session),
+                MenuBarItemID(provider: .claude, metric: .weekly)
+            ]
+        )
+        XCTAssertEqual(readings.map(\.isAtRisk), [true, false])
+    }
+
     private func snapshot(
         provider: ProviderID,
         session: Double,

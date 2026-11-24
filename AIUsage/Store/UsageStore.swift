@@ -7,6 +7,8 @@ struct MenuBarReading: Equatable, Sendable {
     let value: MenuBarReadingValue
     let displayMode: UsageDisplayMode
     let isStale: Bool
+    /// The session runs out before its reset at its current pace.
+    let isAtRisk: Bool
     let isXSubscription: Bool
 
     init(
@@ -15,6 +17,7 @@ struct MenuBarReading: Equatable, Sendable {
         value: MenuBarReadingValue,
         displayMode: UsageDisplayMode,
         isStale: Bool,
+        isAtRisk: Bool = false,
         isXSubscription: Bool = false
     ) {
         self.provider = provider
@@ -23,6 +26,7 @@ struct MenuBarReading: Equatable, Sendable {
         self.displayMode = displayMode
         self.isXSubscription = isXSubscription
         self.isStale = isStale
+        self.isAtRisk = isAtRisk
     }
 }
 
@@ -243,7 +247,8 @@ final class UsageStore {
         for items: [MenuBarItemID],
         displayMode: UsageDisplayMode = .used
     ) -> [MenuBarReading] {
-        items.compactMap { item in
+        let now = Date()
+        return items.compactMap { item in
             guard item.provider.isEnabledInBuild, trackedProviderIDs.contains(item.provider),
                   let state = states[item.provider],
                   state.isToolInstalled != false,
@@ -260,6 +265,7 @@ final class UsageStore {
                 value: value,
                 displayMode: displayMode,
                 isStale: state.isStale,
+                isAtRisk: state.snapshot?.isAtRisk(item.metric, now: now) ?? false,
                 isXSubscription: state.snapshot?.xSubscription != nil
             )
         }
