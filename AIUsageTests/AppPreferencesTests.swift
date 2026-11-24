@@ -744,4 +744,30 @@ final class AppPreferencesTests: XCTestCase {
             .adobe
         )
     }
+
+    @MainActor
+    func testQoderWeeklyMetricMigratesOnceToCredits() throws {
+        defaults.set(true, forKey: "menuBarConfigured.v3")
+        defaults.set(try JSONEncoder().encode([ProviderID.qoder]), forKey: "menuBarVisibleProviders.v3")
+        defaults.set(
+            try JSONEncoder().encode([ProviderID.qoder: [MenuBarMetricID.weekly]]),
+            forKey: "menuBarMetricSelections.v3"
+        )
+
+        let migrated = AppPreferences(defaults: defaults)
+        XCTAssertEqual(migrated.selectedMenuBarMetrics(for: .qoder), [.credits])
+        XCTAssertTrue(defaults.bool(forKey: "qoderCreditsMetricMigrated.v1"))
+
+        // Later explicit opt-in to another metric is preserved across relaunch.
+        migrated.setMenuBarMetric(false, item: MenuBarItemID(provider: .qoder, metric: .credits), availableItems: [
+            MenuBarItemID(provider: .qoder, metric: .credits),
+            MenuBarItemID(provider: .qoder, metric: .weekly)
+        ])
+        migrated.setMenuBarMetric(true, item: MenuBarItemID(provider: .qoder, metric: .weekly), availableItems: [
+            MenuBarItemID(provider: .qoder, metric: .credits),
+            MenuBarItemID(provider: .qoder, metric: .weekly)
+        ])
+        let relaunched = AppPreferences(defaults: defaults)
+        XCTAssertEqual(relaunched.selectedMenuBarMetrics(for: .qoder), [.weekly])
+    }
 }

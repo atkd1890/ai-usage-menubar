@@ -284,6 +284,25 @@ final class AppPreferences {
             defaults.object(forKey: Key.hasCompletedInitialSetup) == nil {
             defaults.set(true, forKey: Key.hasCompletedInitialSetup)
         }
+
+        if defaults.object(forKey: Key.qoderCreditsMetricMigrated) == nil {
+            if let qoderMetrics = menuBarMetricSelections[.qoder],
+               qoderMetrics.contains(.weekly) {
+                var migrated: [MenuBarMetricID] = []
+                for metric in qoderMetrics {
+                    let mapped: MenuBarMetricID = metric == .weekly ? .credits : metric
+                    if !migrated.contains(mapped) {
+                        migrated.append(mapped)
+                    }
+                }
+                menuBarMetricSelections[.qoder] = migrated
+                defaults.set(
+                    Self.encode(menuBarMetricSelections),
+                    forKey: Key.menuBarMetricSelections
+                )
+            }
+            defaults.set(true, forKey: Key.qoderCreditsMetricMigrated)
+        }
     }
 
     var menuBarProviderConfigurations: [MenuBarProviderConfiguration] {
@@ -627,6 +646,7 @@ final class AppPreferences {
         static let selectedRegion = "selectedProviderRegion.v1"
         static let usageDisplayMode = "usageDisplayMode"
         static let refreshInterval = "refreshInterval"
+        static let qoderCreditsMetricMigrated = "qoderCreditsMetricMigrated.v1"
     }
 }
 

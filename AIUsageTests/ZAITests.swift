@@ -201,4 +201,73 @@ final class ZAITests: XCTestCase {
         XCTAssertEqual(ProviderUsageDetail.countdownText(for: try XCTUnwrap(oneOffExpiry.targetDate), from: now, fallback: oneOffExpiry.value), "in 5d 1h")
     }
 
+    func testCodingPlanMapsResetCardsAndMcpUsageFallbackWithoutDuplicatingTimeLimit() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let exp1 = Int(now.addingTimeInterval(3_600).timeIntervalSince1970)
+        let exp2 = Int(now.addingTimeInterval(86_400).timeIntervalSince1970)
+        let expired = Int(now.addingTimeInterval(-60).timeIntervalSince1970)
+        let mcpRefresh = Int(now.addingTimeInterval(7_200).timeIntervalSince1970)
+        let subscription = response(#"{"code":200,"data":[{"productId":"coding-pro","productName":"Pro Coding","status":"VALID","inCurrentPeriod":true}]}"#)
+        let quotaNoTime = response(#"{"code":200,"data":{"limits":[{"type":"TOKENS_LIMIT","unit":3,"number":5,"usage":100,"currentValue":25,"percentage":25}]}}"#)
+        let resetStatus = response(#"{"code":0,"data":{"available_five_hour_resets":[{"expire_at":\#(exp1)},{"expire_at":\#(expired)}],"available_week_resets":[{"expire_at":\#(exp2)}],"latest_five_hour_reset_history":null,"latest_week_reset_history":null,"has_unread_history":false}}"#)
+        let mcpUsage = response(#"{"code":0,"data":{"server_time":1800000000,"next_refresh_at":\#(mcpRefresh),"level":"pro","total_usage":{"used":12,"limit":100,"remaining":88}}}"#)
+
+        let emptyStart = response(#"{"code":0,"data":{"plans":[],"balances":[]}}"#)
+
+        let mapped = try ZAIProvider.map(
+            subscription: subscription,
+            quota: quotaNoTime,
+            start: emptyStart,
+            auth: ZAICredential(token: "fake-api", zcodeToken: "fake-native", email: nil, source: "ZCode desktop"),
+            resetStatus: resetStatus,
+            mcpUsage: mcpUsage,
+            now: now
+        )
+        XCTAssertTrue(mapped.allDiagnosticWarnings.isEmpty)
+        XCTAssertEqual(mapped.resets?.availableCount, 2)
+        XCTAssertEqual(mapped.resets?.expirations.map(\.timeIntervalSince1970), [Double(exp1), Double(exp2)])
+        let toolsWindow = try XCTUnwrap(mapped.windows.first { $0.kind == .additional(id: "zai.tools", title: "Tools") })
+        XCTAssertEqual(toolsWindow.remainingCount, 88)
+        XCTAssertEqual(toolsWindow.limitCount, 100)
+        XCTAssertEqual(toolsWindow.usedPercent, 12, accuracy: 0.01)
+        XCTAssertEqual(toolsWindow.resetsAt?.timeIntervalSince1970, Double(mcpRefresh))
+
+        let quotaWithTime = response(#"{"code":200,"data":{"limits":[{"type":"TOKENS_LIMIT","unit":3,"number":5,"usage":100,"currentValue":25,"percentage":25},{"type":"TIME_LIMIT","usage":200,"currentValue":10,"percentage":5}]}}"#)
+        let deduped = try ZAIProvider.map(
+            subscription: subscription,
+            quota: quotaWithTime,
+            start: emptyStart,
+            auth: ZAICredential(token: "fake-api", zcodeToken: "fake-native", email: nil, source: "ZCode desktop"),
+            resetStatus: resetStatus,
+            mcpUsage: mcpUsage,
+            now: now
+        )
+        XCTAssertEqual(deduped.windows.filter { $0.kind == .additional(id: "zai.tools", title: "Tools") }.count, 1)
+        XCTAssertEqual(deduped.windows.first { $0.kind == .additional(id: "zai.tools", title: "Tools") }?.limitCount, 200)
+    }
+
+    func testCodingPlanFetchSendsReadOnlyResetAndMcpRequestsOnlyWhenActiveCodingPlanExists() async throws {
+        let http = MockHTTPClient([
+            response(#"{"code":200,"data":[{"productId":"coding-pro","productName":"Pro Coding","status":"VALID","inCurrentPeriod":true}]}"#),
+            response(#"{"code":200,"data":{}}"#),
+            response(#"{"code":200,"data":{"limits":[{"type":"TOKENS_LIMIT","unit":3,"number":5,"usage":100,"currentValue":20,"percentage":20}]}}"#),
+            response(#"{"code":0,"data":{"plans":[],"balances":[]}}"#),
+            response(#"{"code":0,"data":{"available_five_hour_resets":[],"available_week_resets":[]}}"#),
+            response(#"{"code":403,"msg":"coding plan is required"}"#, status: 403)
+        ])
+        let provider = ZAIProvider(http: http, method: { .desktop }, credential: { _ in
+            ZAICredential(token: "fake-api", zcodeToken: "fake-native", email: nil, source: "ZCode desktop", startHeaders: ["X-Device-Mid": "fake-device", "X-ZCode-App-Version": "3.18.2"])
+        })
+        let snapshot = try await provider.fetch()
+        XCTAssertEqual(snapshot.planName, "Pro Coding")
+        XCTAssertNil(snapshot.resets)
+        let requests = await http.capturedRequests()
+        XCTAssertEqual(requests.count, 6)
+        XCTAssertEqual(requests[4].url.path, "/api/v1/coding-plan/reset/status")
+        XCTAssertEqual(requests[4].method, .get)
+        XCTAssertEqual(requests[4].headers["X-Bigmodel-Authorization"], "Bearer fake-api")
+        XCTAssertEqual(requests[5].url.path, "/api/v1/mcp/usage")
+        XCTAssertEqual(requests[5].method, .get)
+    }
+
 }

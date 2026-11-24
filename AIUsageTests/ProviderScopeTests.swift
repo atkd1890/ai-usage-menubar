@@ -87,6 +87,19 @@ final class ProviderScopeTests: XCTestCase {
         XCTAssertEqual(ProviderDetailsLayout.summaryWindows(pro).map(\.kind), [.credits, .chat])
         XCTAssertEqual(ProviderDetailsLayout.detailWindows(pro).map(\.kind), [.completions])
         XCTAssertFalse(ProviderDetailsLayout.showsAdditionalUsageRow(pro))
+        XCTAssertEqual(pro.usageDetails, [
+            ProviderUsageDetail(id: "copilot.overage.status", title: "Overage billing", value: "Off")
+        ])
+
+        let proOverageEnabled = try CopilotUsageMapper.map(response: response([
+            "copilot_plan": "individual",
+            "quota_snapshots": [
+                "premium_interactions": ["entitlement": 300, "remaining": 0, "percent_remaining": 0, "has_quota": true, "overage_permitted": true]
+            ]
+        ]), now: Date())
+        XCTAssertEqual(proOverageEnabled.usageDetails, [
+            ProviderUsageDetail(id: "copilot.overage.status", title: "Overage billing", value: "Enabled")
+        ])
 
         let copilotFree = ProviderSnapshot(
             provider: .copilot,

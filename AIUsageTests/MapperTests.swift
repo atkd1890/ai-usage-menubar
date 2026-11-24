@@ -450,6 +450,62 @@ final class MapperTests: XCTestCase {
         )
     }
 
+    func testClaudeAndCodexSurfaceActiveSpendFlagsOnlyWhenTrue() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let claudeActive = try ClaudeUsageMapper.map(
+            response: httpResponse(json: """
+            {
+              "five_hour": {"utilization": 10},
+              "spend": {"enabled": true, "auto_reload": true, "used": {"amount_minor": 100, "exponent": 2, "currency": "USD"}},
+              "extra_usage": {"spend_limit_reached": true}
+            }
+            """),
+            credentials: claudeOAuth(),
+            now: now
+        )
+        XCTAssertEqual(claudeActive.usageDetails, [
+            ProviderUsageDetail(id: "claude.spend.auto_reload", title: "Auto-reload", value: "Enabled"),
+            ProviderUsageDetail(id: "claude.extra_usage.limit_reached", title: "Extra usage cap", value: "Reached")
+        ])
+
+        let claudeInactive = try ClaudeUsageMapper.map(
+            response: httpResponse(json: """
+            {
+              "five_hour": {"utilization": 10},
+              "spend": {"enabled": true, "auto_reload": false, "used": {"amount_minor": 100, "exponent": 2, "currency": "USD"}},
+              "extra_usage": {"spend_limit_reached": false}
+            }
+            """),
+            credentials: claudeOAuth(),
+            now: now
+        )
+        XCTAssertTrue(claudeInactive.usageDetails.isEmpty)
+
+        let codexReached = try CodexUsageMapper.map(
+            response: httpResponse(json: """
+            {
+              "rate_limit": {"primary_window": {"used_percent": 50, "limit_window_seconds": 18000}},
+              "spend_control": {"reached": true}
+            }
+            """),
+            now: now
+        )
+        XCTAssertEqual(codexReached.usageDetails, [
+            ProviderUsageDetail(id: "codex.spend_control.reached", title: "Spend limit", value: "Reached")
+        ])
+
+        let codexNotReached = try CodexUsageMapper.map(
+            response: httpResponse(json: """
+            {
+              "rate_limit": {"primary_window": {"used_percent": 50, "limit_window_seconds": 18000}},
+              "spend_control": {"reached": false}
+            }
+            """),
+            now: now
+        )
+        XCTAssertTrue(codexNotReached.usageDetails.isEmpty)
+    }
+
     private func claudeOAuth() -> ClaudeOAuth {
         ClaudeOAuth(
             accessToken: "token",

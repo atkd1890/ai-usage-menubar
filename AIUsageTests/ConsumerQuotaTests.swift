@@ -221,7 +221,17 @@ final class ConsumerQuotaTests: XCTestCase {
                 value: "Free \(1000.formatted(.number)) · Total \(1300.formatted(.number))"
             )
         ])
-        XCTAssertThrowsError(try ConsumerQuotaProvider.manus(httpResponse(json: #"{"totalCredits":1300,"freeCredits":1000}"#)))
+        let balanceOnly = try ConsumerQuotaProvider.manus(httpResponse(json: #"{"totalCredits":1300,"freeCredits":1000}"#))
+        XCTAssertTrue(balanceOnly.windows.isEmpty)
+        XCTAssertEqual(balanceOnly.planName, "Free")
+        XCTAssertTrue(balanceOnly.hasPanelContent)
+        XCTAssertEqual(balanceOnly.usageDetails.first?.value, "Free \(1000.formatted(.number)) · Total \(1300.formatted(.number))")
+
+        let bonusZeroAndWeekly = try ConsumerQuotaProvider.manus(httpResponse(json: #"{"maxRefreshCredits":500,"refreshCredits":250,"refreshInterval":"weekly","freeCredits":0,"bonusCredits":250,"totalCredits":250}"#))
+        XCTAssertEqual(bonusZeroAndWeekly.windows.first?.kind, .weekly)
+        XCTAssertEqual(bonusZeroAndWeekly.usageDetails.first?.value, "Free 0 · Bonus 250 · Total 250")
+
+        XCTAssertThrowsError(try ConsumerQuotaProvider.manus(httpResponse(json: "{}")))
         XCTAssertThrowsError(try ConsumerQuotaProvider.manus(httpResponse(401)))
     }
     func testManusSupportsDesktopAndChromeSessionSources() async throws {
@@ -333,6 +343,19 @@ final class ConsumerQuotaTests: XCTestCase {
             XCTAssertThrowsError(try ConsumerQuotaProvider.kimi(subscription: subscription,
                 stats: httpResponse(json: "{\"subscriptionBalance\":{\"feature\":\"FEATURE_OMNI\",\"amountUsedRatio\":\(invalid)}}")))
         }
+
+        let withCodeUsages = try ConsumerQuotaProvider.kimi(
+            subscription: httpResponse(json: #"{"subscription":{"goods":{"title":"Plus"}}}"#),
+            stats: httpResponse(json: #"{"subscriptionBalance":{"feature":"FEATURE_OMNI","amountUsedRatio":0.1}}"#),
+            code: httpResponse(json: #"{"usages":[{"scope":"FEATURE_CODING","detail":{"limit":"1000","used":"250","resetTime":"2026-12-01T00:00:00Z"},"limits":[{"window":{"duration":5,"timeUnit":"TIME_UNIT_HOUR"},"detail":{"limit":"200","remaining":"150","resetTime":"2026-11-24T18:00:00Z"}}]}]}"#)
+        )
+        let codeTotal = try XCTUnwrap(withCodeUsages.windows.first { $0.kind.rawValue == "additional:kimi.code.FEATURE_CODING.total" })
+        XCTAssertEqual(codeTotal.remainingCount, 750)
+        XCTAssertEqual(codeTotal.limitCount, 1000)
+        XCTAssertEqual(codeTotal.usedPercent, 25, accuracy: 0.01)
+        let code5h = try XCTUnwrap(withCodeUsages.windows.first { $0.kind.rawValue == "additional:kimi.code.FEATURE_CODING.5.0.TIME_UNIT_HOUR" })
+        XCTAssertEqual(code5h.remainingCount, 150)
+        XCTAssertEqual(code5h.limitCount, 200)
     }
     func testScopedReaderCRCAndSnappyBounds() throws {
         // Raw Snappy: length 5, literal 'hello'.

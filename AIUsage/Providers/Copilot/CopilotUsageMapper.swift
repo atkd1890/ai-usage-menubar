@@ -131,6 +131,17 @@ enum CopilotUsageMapper {
                 ))
             }
         }
+        if let premium = ProviderParsing.object(snapshots["premium_interactions"]),
+           premium["has_quota"] as? Bool != false,
+           premium["unlimited"] as? Bool != true,
+           (ProviderParsing.double(premium["entitlement"]) ?? 0) > 0,
+           let permitted = premium["overage_permitted"] as? Bool {
+            details.append(ProviderUsageDetail(
+                id: "copilot.overage.status",
+                title: "Overage billing",
+                value: permitted ? "Enabled" : "Off"
+            ))
+        }
         return details
     }
 

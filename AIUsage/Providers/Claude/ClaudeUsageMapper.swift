@@ -123,7 +123,23 @@ enum ClaudeUsageMapper {
         let warnings = schemaWarnings(in: body, response: response)
 
         let spend = ProviderParsing.object(body["spend"])
-        let enabled = spend?["enabled"] as? Bool ?? ProviderParsing.object(body["extra_usage"])?["is_enabled"] as? Bool
+        let extraUsage = ProviderParsing.object(body["extra_usage"])
+        let enabled = spend?["enabled"] as? Bool ?? extraUsage?["is_enabled"] as? Bool
+        var details = notices
+        if enabled != false, spend?["auto_reload"] as? Bool == true {
+            details.append(ProviderUsageDetail(
+                id: "claude.spend.auto_reload",
+                title: "Auto-reload",
+                value: "Enabled"
+            ))
+        }
+        if extraUsage?["spend_limit_reached"] as? Bool == true {
+            details.append(ProviderUsageDetail(
+                id: "claude.extra_usage.limit_reached",
+                title: "Extra usage cap",
+                value: "Reached"
+            ))
+        }
         return ProviderSnapshot(
             provider: .claude,
             planName: planName(credentials),
@@ -132,7 +148,7 @@ enum ClaudeUsageMapper {
             resets: resets,
             fetchedAt: now,
             usageScope: "Shared account limits · Claude Chat & Code",
-            usageDetails: notices,
+            usageDetails: details,
             prepaidBalance: money(spend?["balance"]),
             additionalUsageEnabled: enabled,
             usageBreakdown: consumptionBreakdown(body, now: now),

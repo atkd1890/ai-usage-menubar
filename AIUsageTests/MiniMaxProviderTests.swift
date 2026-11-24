@@ -338,4 +338,78 @@ final class MiniMaxProviderTests: XCTestCase {
             BoundedCreditProgress(label: "Token Plan", used: 500, limit: 2000, resetsAt: nil, resetNote: "No reset")
         )
     }
+
+    func testMapsAllMultimodalPoolsUnlimitedWeeklyZeroBalancesAndGiftCredits() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let remainsJSON = """
+        {
+          "model_remains": [
+            {
+              "model_name": "general",
+              "current_interval_remaining_percent": 75,
+              "remains_time": 3600000,
+              "current_weekly_status": 3,
+              "weekly_remains_time": 86400000
+            },
+            {
+              "model_name": "MiniMax-Hailuo-Video",
+              "current_interval_used_count": 2,
+              "current_interval_total_count": 10,
+              "end_time": 1800007200000
+            },
+            {
+              "model_name": "MiniMax-Speech",
+              "current_interval_usage_count": 15,
+              "current_interval_total_count": 20,
+              "remains_time": 1800000
+            },
+            {
+              "model_name": "MiniMax-Image",
+              "current_interval_used_percent": 40,
+              "current_interval_total_percent": 100
+            },
+            {
+              "model_name": "MiniMax-Music",
+              "current_interval_status": 3
+            }
+          ],
+          "base_resp": {"status_code": 0}
+        }
+        """
+        let snapshot = try MiniMaxProvider.map(
+            remains: httpResponse(200, json: remainsJSON),
+            tokenPlanCredit: httpResponse(200, json: #"{"remaining_credits":0,"base_resp":{"status_code":0}}"#),
+            membership: httpResponse(200, json: #"{"token_plan_tier":"Max","daily_login_gift_credit_remaining":50,"base_resp":{"status_code":0}}"#),
+            now: now
+        )
+        XCTAssertTrue(snapshot.allDiagnosticWarnings.isEmpty)
+        XCTAssertEqual(snapshot.windows.count, 6)
+        XCTAssertEqual(snapshot.windows[0].kind, .session)
+        XCTAssertEqual(snapshot.windows[0].usedPercent, 25, accuracy: 0.01)
+        XCTAssertEqual(snapshot.windows[0].resetsAt, now.addingTimeInterval(3_600))
+
+        XCTAssertEqual(snapshot.windows[1].kind, .weekly)
+        XCTAssertTrue(snapshot.windows[1].isUnlimited)
+        XCTAssertEqual(snapshot.windows[1].resetsAt, now.addingTimeInterval(86_400))
+
+        XCTAssertEqual(snapshot.windows[2].kind, .additional(id: "minimax.video", title: "Video"))
+        XCTAssertEqual(snapshot.windows[2].remainingCount, 8)
+        XCTAssertEqual(snapshot.windows[2].limitCount, 10)
+
+        XCTAssertEqual(snapshot.windows[3].kind, .additional(id: "minimax.model.minimax-speech", title: "Speech"))
+        XCTAssertEqual(snapshot.windows[3].remainingCount, 15)
+        XCTAssertEqual(snapshot.windows[3].limitCount, 20)
+        XCTAssertEqual(snapshot.windows[3].usedPercent, 25, accuracy: 0.01)
+
+        XCTAssertEqual(snapshot.windows[4].kind, .additional(id: "minimax.model.minimax-image", title: "Image"))
+        XCTAssertEqual(snapshot.windows[4].usedPercent, 40, accuracy: 0.01)
+
+        XCTAssertEqual(snapshot.windows[5].kind, .additional(id: "minimax.model.minimax-music", title: "Music"))
+        XCTAssertTrue(snapshot.windows[5].isUnlimited)
+
+        let additional = try XCTUnwrap(snapshot.usageDetails.first { $0.id == "minimax.credits" })
+        XCTAssertEqual(additional.value, "Gift 50")
+        let tokenPlanZero = try XCTUnwrap(snapshot.usageDetails.first { $0.id == "minimax.agent.credits" })
+        XCTAssertEqual(tokenPlanZero.value, "0 credits")
+    }
 }

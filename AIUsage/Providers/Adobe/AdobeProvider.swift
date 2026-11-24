@@ -193,6 +193,7 @@ actor AdobeProvider: UsageProvider {
         }
 
         var windows: [QuotaWindow] = []
+        var details: [ProviderUsageDetail] = []
         let resetsAt = balance.total?.availableUntil.flatMap(parseISO8601)
 
         // 1. Monthly (Total Generative Credits)
@@ -212,7 +213,13 @@ actor AdobeProvider: UsageProvider {
         }
 
         // 2. Firefly Plan Credit (Secondary Quota Window)
-        if let fireflyItem = balance.credits?["firefly_plan_credit"] ?? balance.credits?.first(where: { $0.key.contains("firefly") })?.value,
+        let fireflyKey: String? = if balance.credits?["firefly_plan_credit"] != nil {
+            "firefly_plan_credit"
+        } else {
+            balance.credits?.keys.sorted().first(where: { $0.contains("firefly") })
+        }
+        if let fireflyKey,
+           let fireflyItem = balance.credits?[fireflyKey],
            let fireflyQuota = fireflyItem.quota,
            let fireflyLimit = fireflyQuota.total {
             let used = fireflyQuota.used ?? 0
@@ -230,26 +237,62 @@ actor AdobeProvider: UsageProvider {
             )
         }
 
-        guard !windows.isEmpty else {
+        // 3. Remaining credit pools in `credits`
+        for (key, item) in (balance.credits ?? [:]).sorted(by: { $0.key < $1.key }) where key != fireflyKey {
+            guard let itemQuota = item.quota else { continue }
+            let itemResetsAt = item.availableUntil.flatMap(parseISO8601) ?? resetsAt
+            if let totalLimit = itemQuota.total, totalLimit > 0 {
+                let used = itemQuota.used ?? 0
+                let available = itemQuota.available ?? max(totalLimit - used, 0)
+                let usedPercent = (used / totalLimit) * 100.0
+                windows.append(
+                    QuotaWindow(
+                        kind: .additional(id: "adobe.\(key)", title: QuotaDiscovery.name(key)),
+                        usedPercent: min(max(usedPercent, 0), 100),
+                        resetsAt: itemResetsAt,
+                        remainingCount: available,
+                        limitCount: totalLimit
+                    )
+                )
+            } else if let available = itemQuota.available, available >= 0 {
+                details.append(ProviderUsageDetail(
+                    id: "adobe.\(key).credits",
+                    title: QuotaDiscovery.name(key),
+                    value: "\(QuotaWindow.formatCount(available)) credits"
+                ))
+            }
+        }
+
+        if let cap = balance.total?.planCap?.uppercased(), ["HARD", "SOFT"].contains(cap) {
+            details.append(ProviderUsageDetail(
+                id: "adobe.plan_cap",
+                title: "Credit cap",
+                value: cap == "HARD" ? "Hard" : "Soft"
+            ))
+        }
+
+        guard !windows.isEmpty || !details.isEmpty else {
             throw ProviderFailure(.invalidResponse, "No Adobe generative quota found in balance response.")
         }
-        if !windows.contains(where: { $0.kind == .monthly }) {
-            windows.insert(QuotaWindow(
-                kind: .monthly,
-                usedPercent: 0,
-                resetsAt: nil,
-                isInactive: true,
-                inactiveDetail: "No plan"
-            ), at: 0)
-        }
-        if !windows.contains(where: { $0.kind == .firefly }) {
-            windows.append(QuotaWindow(
-                kind: .firefly,
-                usedPercent: 0,
-                resetsAt: nil,
-                isInactive: true,
-                inactiveDetail: "No Firefly plan"
-            ))
+        if !windows.isEmpty {
+            if !windows.contains(where: { $0.kind == .monthly }) {
+                windows.insert(QuotaWindow(
+                    kind: .monthly,
+                    usedPercent: 0,
+                    resetsAt: nil,
+                    isInactive: true,
+                    inactiveDetail: "No plan"
+                ), at: 0)
+            }
+            if !windows.contains(where: { $0.kind == .firefly }) {
+                windows.append(QuotaWindow(
+                    kind: .firefly,
+                    usedPercent: 0,
+                    resetsAt: nil,
+                    isInactive: true,
+                    inactiveDetail: "No Firefly plan"
+                ))
+            }
         }
 
         let email = AccountEmail.jwt(accessToken)
@@ -262,6 +305,7 @@ actor AdobeProvider: UsageProvider {
             credentialSource: credentialSource,
             accountLabel: email ?? "Adobe Account",
             accountEmail: email,
+            usageDetails: details,
             diagnosticWarnings: ResponseSchemaWatch.deduplicated(warnings)
         )
     }

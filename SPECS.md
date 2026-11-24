@@ -119,7 +119,7 @@ Current summary/detail conventions live in `ProviderDetailsLayout`: Claude, Code
 - Credential source: Keychain `Claude Code-credentials` / `~/.claude/.credentials.json`; desktop/browser `sessionKey*` cookies.
 - Read-only endpoints: `api.anthropic.com/api/oauth/usage` (`?cedar_ember=1` hourly for reset grants); `claude.ai/api/organizations/{id}/usage`.
 - Auth behavior: HTTP `403` with `error.details.error_code == "oauth_not_allowed_for_organization"` skips token refresh and reports an authentication failure; if stored credentials change twice during one refresh, fail transiently immediately without probing stale candidates.
-- Data families: Session, weekly, Sonnet/Fable and discovered scoped/model quotas; consumed usage by Code/Chat/Cowork; banked/usable resets and expiry; extra spend, monthly cap, enablement.
+- Data families: Session, weekly, Sonnet/Fable and discovered scoped/model quotas; consumed usage by Code/Chat/Cowork; banked/usable resets and expiry; extra spend, monthly cap, enablement, active `auto_reload` and `spend_limit_reached` status flags.
 
 ### Codex
 
@@ -127,7 +127,7 @@ Current summary/detail conventions live in `ProviderDetailsLayout`: Claude, Code
 - Login methods (default first): CLI OAuth (also resolves shared Codex/desktop auth); Edge; Chrome.
 - Credential source: `$CODEX_HOME`/`~/.config/codex`/`~/.codex` `auth.json`, Keychain `Codex Auth`; `__Secure-next-auth.session-token*`.
 - Read-only endpoints: `chatgpt.com/backend-api/wham/usage`, `.../wham/rate-limit-reset-credits`.
-- Data families: Session/weekly, Spark windows, code-review and additional rate limits; flex/additional credits and reported monetary value; banked/usable resets and expiry.
+- Data families: Session/weekly, Spark windows, code-review and additional rate limits; flex/additional credits and reported monetary value; banked/usable resets and expiry; active `spend_control.reached` status flag.
 
 ### Cursor / X Subscription
 
@@ -152,7 +152,7 @@ Current summary/detail conventions live in `ProviderDetailsLayout`: Claude, Code
 - Login methods (default first): Editor + CLI fallback (explicit combined mode); editor only; CLI only.
 - Credential source: `~/.config/github-copilot/{apps,hosts}.json`, `gh` config / Keychain `gh:github.com`.
 - Read-only endpoints: `api.github.com/copilot_internal/user`.
-- Data families: Credits/premium quota, chat/monthly, completions, other quota snapshots; unlimited flags; overage and credits-used details.
+- Data families: Credits/premium quota, chat/monthly, completions, other quota snapshots; unlimited flags; overage count, `overage_permitted` status on bounded `premium_interactions`, and credits-used details.
 
 ### Gemini
 
@@ -176,7 +176,7 @@ Current summary/detail conventions live in `ProviderDetailsLayout`: Claude, Code
 - Login methods (default first): Edge; Chrome.
 - Credential source: `ims_sid`.
 - Read-only endpoints: Silent IMS `adobeid-na1.services.adobe.com/ims/authorize/v1` → `firefly.adobe.io/v1/credits/balance`.
-- Data families: Total monthly generative credits and Firefly allowance, counts, reset/expiry.
+- Data families: Total monthly generative credits, Firefly allowance and all other `credits` pools/balances, `planCap`, counts, reset/expiry.
 
 ### Manus
 
@@ -184,8 +184,8 @@ Current summary/detail conventions live in `ProviderDetailsLayout`: Claude, Code
 - Login methods (default first): Manus desktop; Edge; Chrome.
 - Credential source: `session_id`.
 - Read-only endpoints: `api.manus.im/user.v1.UserService/GetAvailableCredits`; optional `user.v1.UserService/UserInfo` for the validated account email. The profile uses the same selected session Bearer token, is cached per selection/credential (including failed/empty lookup) and never gates quota. Desktop UserInfo email is live-verified.
-- Badge: when no active Pro monthly allocation exists, display `Free`, not a blank badge or No subscription. Keep the unavailable Monthly tile note `No Pro plan`; allocated daily/free balances remain measured normally.
-- Data families: Daily refresh credits and monthly credits, counts/reset; free, add-on and total credit balances.
+- Badge: when no active Pro monthly allocation exists, display `Free`, not a blank badge or No subscription. Keep the unavailable Monthly tile note `No Pro plan` when a refresh window or `proMonthlyCredits` field is present; allocated daily/weekly/monthly/free balances remain measured normally, including balance-only snapshots and explicit zero balances.
+- Data families: Refresh credits (`daily`/`weekly`/`monthly` per `refreshInterval`) and monthly credits, counts/reset; free, bonus, add-on and total credit balances.
 
 ### Kimi
 
@@ -193,7 +193,7 @@ Current summary/detail conventions live in `ProviderDetailsLayout`: Claude, Code
 - Login methods (default first): Kimi desktop; Edge; Chrome.
 - Credential source: `kimi-desktop` / browser Local Storage `access_token`/`refresh_token` (origin `https://www.kimi.ai`), else `kimi-auth` cookie.
 - Read-only endpoints: `www.kimi.ai/apiv2/...MembershipService/GetSubscription(Stats)`, `BillingService/GetUsages`; refresh `www.kimi.ai/api/auth/token/refresh` (needs `kimiNativeRefreshAllowed.v1`).
-- Data families: Membership monthly/feature allowances; Code weekly, total and duration-specific limits; counts and reset/expiry.
+- Data families: Membership monthly/feature allowances; Code weekly, total and duration-specific limits (`remaining` or `used` relative to `limit`); counts and reset/expiry.
 
 ### Qwen
 
@@ -209,7 +209,7 @@ Current summary/detail conventions live in `ProviderDetailsLayout`: Claude, Code
 - Login methods (default first): Desktop (Code/Hub credential resolution); Edge; Chrome.
 - Credential source: `~/.minimax/auth/prod/*/mcode-public/auth.json` (OAuth), MiniMax Hub `hub-config-global.json` (`v2enc` + `.token-key`); browser `_token`.
 - Read-only endpoints: `agent.minimax.io` membership, `platform.minimax.io` token plan, `design.minimax.io` wallet/profile, `hailuoai.video` credit/equity (signed requests).
-- Data families: Token Plan session/weekly/video; Token Plan/Agent credits; Design and Hailuo wallet balances/equity and plan metadata.
+- Data families: Token Plan session/weekly (including `status == 3` Unlimited and `remaining_percent` fields) and all multimodal `model_remains` buckets (Video, Audio/Speech, Image, Music, etc.); Token Plan/Agent/gift credits (preserving explicit zero balances); Design and Hailuo wallet balances/equity and plan metadata.
 
 ### Qoder
 
@@ -217,7 +217,7 @@ Current summary/detail conventions live in `ProviderDetailsLayout`: Claude, Code
 - Login methods (default first): Desktop (Qoder app/IDE credential resolution); Edge; Chrome.
 - Credential source: `com.qoder.app.stable/auth.v1.dat` (`Qoder App Safe Storage`), else Qoder IDE `state.vscdb` (`Qoder Safe Storage`); `qoder_session_cookie`.
 - Read-only endpoints: `openapi.qoder.sh` usage/plan/refresh; `qoder.com/sash/api/v2/me/usage`.
-- Data families: User plan quota/counts/reset; add-on credits; organization resource pool; plan/account metadata.
+- Data families: User plan credits (`userQuota` mapped to `.credits` with one-time `qoderCreditsMetricMigrated.v1` migration from `.weekly`, counts/reset and fractional/percent normalization); add-on credits; `dedicatedResourcePackages` with bounded progress and expiry; organization resource pool (`total` or `cap`); plan/account metadata.
 
 ### Dola
 
@@ -235,7 +235,7 @@ Current summary/detail conventions live in `ProviderDetailsLayout`: Claude, Code
 - Region: CN. Login methods (default first): ZCode desktop, Edge, Chrome. This intentionally reintroduces the existing `zai` raw value after verifying the current contracts; do not restore the retired API-key-only adapter or silently read credentials from Claude/OpenCode/environment settings. New tracking is seeded once with `zaiProviderAdded.v2`; later opt-outs persist.
 - Desktop: selected Z.ai OAuth account in `~/.zcode/v2/credentials.json`, with sibling `credential-source` equal to `os`. Keychain service `ZCode Credential Encryption`, account SHA-256 of the resolved absolute credential path, read via `SecurityKeychainAccessor` (`/usr/bin/security`) so Keychain ACLs persist across local builds. Values use `enc:v2:os:<key fingerprint>:<nonce>.<tag>.<ciphertext>`, base64url AES-256-GCM, 12-byte nonce, 16-byte tag and SHA-256 key fingerprint. Reject other encryption sources, mismatched keys and tampering; never create/migrate keys or modify the source file.
 - Browser: selected Edge/Chrome Default Local Storage (`BrowserDatabaseAccess` bookmark path + `SettingsView` access button), exact origin `https://z.ai`, keys `z-ai-open-platform-token-production` and `platform-user-info`. `api.z.ai` redirects its website to `z.ai/model-api`; API calls still use `api.z.ai`. Chat login at `chat.z.ai` is not a substitute. Read the live LevelDB manifest read-only with one retry on compaction race, never copying tables.
-- Read-only APIs: `api.z.ai/api/biz/subscription/list`, `/api/monitor/usage/quota/limit`, `/api/biz/customer/getCustomerInfo`; native Start Plan `zcode.z.ai/api/v1/zcode-plan/billing/balance?app_version=...`. Bearer business OAuth goes only to `api.z.ai`; the separate native JWT goes only to `zcode.z.ai`. Propagate `.authentication` (`401`/`403`) and `.rateLimited` (`429`) from `/api/monitor/usage/quota/limit` instead of silently downgrading them to unavailable. Do not create project/API keys, call generation, claim a Start Plan, purchase, redeem or perform source-token refresh/writeback. Re-read source credentials on polling so source app rotation is respected.
+- Read-only APIs: `api.z.ai/api/biz/subscription/list`, `/api/monitor/usage/quota/limit`, `/api/biz/customer/getCustomerInfo`; native Start Plan `zcode.z.ai/api/v1/zcode-plan/billing/balance?app_version=...`; optional active Coding Plan read-only endpoints `zcode.z.ai/api/v1/coding-plan/reset/status` (banked reset cards; never `/use`) and `zcode.z.ai/api/v1/mcp/usage` (fallback for `zai.tools` when `TIME_LIMIT` is absent). Bearer business OAuth goes only to `api.z.ai` (and as `X-Bigmodel-Authorization` on ZCode coding-plan routes to `zcode.z.ai`); the separate native JWT goes only to `zcode.z.ai`. Propagate `.authentication` (`401`/`403`) and `.rateLimited` (`429`) from `/api/monitor/usage/quota/limit` instead of silently downgrading them to unavailable. Do not create project/API keys, call generation, claim a Start Plan, purchase, redeem or perform source-token refresh/writeback. Re-read source credentials on polling so source app rotation is respected.
 - Start Plan requires the existing `deviceMid` from `~/.zcode/v2/telemetry-state.json` and the installed app version/platform headers. Read only that field; do not read/transmit other telemetry or generate a replacement device identity. Never print/store the device ID in diagnostics. Send this context only to the native host, never the API/browser host. Missing context leaves Start Plan unavailable without invalidating the verified Coding Plan reading.
 - Mapping: inspect all subscription entries and all quota limits. Coding Plan `usage` is capacity, `currentValue` used, `percentage` consumed percent; `unit`/`number` describe cadence, not capacity. Keep session/weekly and tool/model readings separate; new measured buckets remain visible with compatibility warnings. Only emit the gray `Coding Plan` (`No plan`) placeholder when BOTH Start Plan windows and Coding Plan windows are empty (or `Unavailable` when an active Coding Plan exists whose quota failed to load); do not append a redundant `Coding Plan — No plan` tile alongside active Start Plan windows.
 - Start Plan: match each balance with its plan/entitlement, retain each model and unit, total/remaining/available-now values including zero, expiry and plan dates. Explicit entitlement periods (`daily`, etc.) establish reset semantics; period-end alone is not a reset. Daily model token windows lead the summary; Coding Plan stays a distinct tile when present. Stable metric IDs derive from plan + entitlement + unit, not a rotating bucket ID. Avoid adding model pools together. Entitlement grant amounts already represented by a balance are not duplicated; future grants retain effective dates.
@@ -251,7 +251,7 @@ Current summary/detail conventions live in `ProviderDetailsLayout`: Claude, Code
 - Read-only APIs: GET `/console/accounts`; POST `/billing/meter/get-user-resource-summary`, `/billing/meter/get-user-resource-free-packages`, `/billing/meter/get-user-resource-paid-packages`. Choose the exact stored account UID for desktop; browser needs one unambiguous selected personal account. Package requests use response-discovered PackageCodes, valid/exhausted Status `[0,3]`, bounded pagination and explicit day slices in Asia/Shanghai. Retain the summary and completed families on optional-page failure, mark incomplete details, and reject repeated pages. Never call check-in, gift/compensation claims, purchase, API-key creation, generation or redemption routes.
 - Identity: optional same-source OIDC GET `/auth/realms/copilot/protocol/openid-connect/userinfo`. Accept a validated email only with `email_verified=true`; cache the attempt per selected source/account. Do not treat the account nickname as email. History remains source/account scoped when email is absent.
 - Data mapping: Packages contain `CycleTotalCapacity`, `CycleRemainCapacity`, `CycleUsedCapacity`, reserved credits and unit. CreditGroups and TotalCredits overlap these package totals and are not added again; known groups are base, plan bonus, add-on and platform benefit. Unknown fields/groups produce compatibility warnings. Preserve exhausted allocated pools and zero balances; omit `0/0` groups with no allocation. Do not add monthly allowance, gift and add-on into one progress denominator.
-- Presentation: standard Free/verified-plan header, base bounded allowance in summary. Use Monthly only when the returned slice cycle establishes it. For cyclic allocations, `CycleEndTime` before `DeductionEndTime` establishes the next reset at the following second; when a base package has no next reset (final cycle where `CycleEndTime >= DeductionEndTime`), surface its `DeductionEndTime` expiry detail. Additional gift/add-on counts/progress and package expiry stay under shared disclosure. Multiple underlying packages retain their remaining breakdown without adding to the summary.
+- Presentation: standard Free/verified-plan header, base bounded allowance in summary. Use Monthly only when the returned slice cycle establishes it. For cyclic allocations, `CycleEndTime` before `DeductionEndTime` establishes the next reset at the following second; when a base package has no next reset (final cycle where `CycleEndTime >= DeductionEndTime`), surface its `DeductionEndTime` expiry detail. Additional gift/add-on counts/progress and package expiry stay under shared disclosure, ordered soonest-expiring first (matching FIFO deduction). Multiple underlying packages retain their remaining breakdown without adding to the summary.
 - Validation and icon: CodeBuddy desktop summary, package breakdown and verified email are live-verified; Chrome/browser edge cases use fixtures. Transparent monochrome Buddy SVG uses shared template rendering.
 
 ### Provider-specific behavior
@@ -327,7 +327,7 @@ Each mapper diffs live responses against `ConfirmedSchemaCatalog` (+ user overri
 
 ## 7. Known implementation gaps
 
-The current implementation is not yet universally compliant with the policy above. Examples visible in source: Manus filters zero credit balances and requires a bounded window; Kimi requires bounded usage; MiniMax selects a primary model and first video bucket and filters some zero credit amounts; Adobe selects one Firefly entry and requires a bounded quota; generic Additional Usage visibility uses positive-value gates and reset rows use `availableCount > 0`. Some bounded-progress and reset fallback helpers also default to zero or `No reset` without proving those semantics. These are audit follow-ups, not approved exceptions. Change runtime behavior only within the requested scope; a documentation update alone does not fix or live-verify these adapters.
+The current implementation is not yet universally compliant with the policy above. Examples remaining in source: Kimi requires bounded usage; generic Additional Usage visibility uses positive-value gates and reset rows use `availableCount > 0`; some bounded-progress and reset fallback helpers default to zero or `No reset` without proving those semantics; Gemini Media Credits (`labs.google` / Flow / Whisk) and Meta Muse Code CLI (`muse usage --json`) are not yet wired because no active live sessions were available to verify their live payloads. These are audit follow-ups, not approved exceptions. Change runtime behavior only within the requested scope; a documentation update alone does not fix or live-verify these adapters.
 
 ### Dola paid quota coverage
 

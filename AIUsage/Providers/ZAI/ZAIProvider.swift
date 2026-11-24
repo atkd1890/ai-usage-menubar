@@ -18,7 +18,7 @@ actor ZAIProvider: UsageProvider {
                 headers: ["Authorization": token.lowercased().hasPrefix("bearer ") ? token : "Bearer " + token, "Accept": "application/json"], body: nil)
         }
         let subscription = try await http.send(request("api.z.ai", "/api/biz/subscription/list", auth.token))
-        _ = try Self.envelope(subscription)
+        let subscriptionRoot = try Self.envelope(subscription)
         let account = try? await http.send(request("api.z.ai", "/api/biz/customer/getCustomerInfo", auth.token))
         let quota = try? await http.send(request("api.z.ai", "/api/monitor/usage/quota/limit", auth.token))
         if let quota {
@@ -33,7 +33,28 @@ actor ZAIProvider: UsageProvider {
             for (key, value) in auth.startHeaders { balanceRequest.headers[key] = value }
             start = try? await http.send(balanceRequest)
         }
-        return try Self.map(subscription: subscription, quota: quota, start: start, auth: auth, account: account)
+        var resetStatus: HTTPResponse?
+        var mcpUsage: HTTPResponse?
+        if let zcodeToken = auth.zcodeToken, Self.hasActiveCodingPlan(in: subscriptionRoot) {
+            func zcodeRequest(_ path: String) -> HTTPRequest {
+                var req = request("zcode.z.ai", path, zcodeToken)
+                req.headers["X-Bigmodel-Authorization"] = auth.token.lowercased().hasPrefix("bearer ") ? auth.token : "Bearer " + auth.token
+                for (key, value) in auth.startHeaders { req.headers[key] = value }
+                return req
+            }
+            resetStatus = try? await http.send(zcodeRequest("/api/v1/coding-plan/reset/status"))
+            mcpUsage = try? await http.send(zcodeRequest("/api/v1/mcp/usage"))
+        }
+        return try Self.map(subscription: subscription, quota: quota, start: start, auth: auth, account: account, resetStatus: resetStatus, mcpUsage: mcpUsage)
+    }
+
+    private static func hasActiveCodingPlan(in subscriptionRoot: [String: Any]) -> Bool {
+        guard let plans = subscriptionRoot["data"] as? [[String: Any]] else { return false }
+        return plans.contains { plan in
+            guard let product = plan["productId"] as? String else { return false }
+            let isCoding = product.lowercased().contains("coding") || (plan["productName"] as? String)?.lowercased().contains("coding") == true
+            return isCoding && plan["status"] as? String == "VALID" && plan["inCurrentPeriod"] as? Bool == true
+        }
     }
     static func date(_ value: Any?) -> Date? {
         if let number = QuotaDiscovery.number(value) { return number > 0 ? ProviderParsing.date(number) : nil }
@@ -54,7 +75,7 @@ actor ZAIProvider: UsageProvider {
         }
         return root
     }
-    static func map(subscription: HTTPResponse, quota: HTTPResponse?, start: HTTPResponse?, auth: ZAICredential, account: HTTPResponse? = nil, now: Date = Date()) throws -> ProviderSnapshot {
+    static func map(subscription: HTTPResponse, quota: HTTPResponse?, start: HTTPResponse?, auth: ZAICredential, account: HTTPResponse? = nil, resetStatus: HTTPResponse? = nil, mcpUsage: HTTPResponse? = nil, now: Date = Date()) throws -> ProviderSnapshot {
         let root = try envelope(subscription)
         guard let plans = root["data"] as? [[String: Any]] else { throw ProviderFailure(.invalidResponse, "Z.ai subscription response changed.") }
         var warnings = ResponseSchemaWatch.confirmedJSONKeys(in: root, provider: .zai, endpoint: "Z.ai envelope")
@@ -193,6 +214,47 @@ actor ZAIProvider: UsageProvider {
                 }
             } else { details.append(ProviderUsageDetail(id: "compatibility.zai.start", title: "Start Plan", value: "Unavailable")) }
         }
+        if let mcpUsage, let mcpData = (try? envelope(mcpUsage))?["data"] as? [String: Any] {
+            warnings += ResponseSchemaWatch.httpHeaders(mcpUsage, provider: .zai, endpoint: "ZCode mcp usage")
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(in: mcpData, provider: .zai, endpoint: "ZCode mcp usage")
+            if let totalUsage = mcpData["total_usage"] as? [String: Any] {
+                warnings += ResponseSchemaWatch.confirmedJSONKeys(in: totalUsage, provider: .zai, endpoint: "ZCode mcp total_usage")
+                let toolsKind = QuotaKind.additional(id: "zai.tools", title: "Tools")
+                if !windows.contains(where: { $0.kind == toolsKind }),
+                   let limit = QuotaDiscovery.number(totalUsage["limit"]), limit > 0,
+                   let remaining = QuotaDiscovery.number(totalUsage["remaining"]),
+                   remaining >= 0, remaining <= limit {
+                    windows.append(QuotaWindow(
+                        kind: toolsKind,
+                        usedPercent: (limit - remaining) / limit * 100,
+                        resetsAt: Self.date(mcpData["next_refresh_at"]),
+                        remainingCount: remaining,
+                        limitCount: limit
+                    ))
+                }
+            }
+        }
+        var resets: UsageResets?
+        if let resetStatus, let resetData = (try? envelope(resetStatus))?["data"] as? [String: Any] {
+            warnings += ResponseSchemaWatch.httpHeaders(resetStatus, provider: .zai, endpoint: "ZCode reset status")
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(in: resetData, provider: .zai, endpoint: "ZCode reset status")
+            let fiveHour = resetData["available_five_hour_resets"] as? [[String: Any]] ?? []
+            let weekly = resetData["available_week_resets"] as? [[String: Any]] ?? []
+            let allItems = fiveHour + weekly
+            var expirations: [Date] = []
+            for item in allItems {
+                warnings += ResponseSchemaWatch.confirmedJSONKeys(in: item, provider: .zai, endpoint: "ZCode reset item")
+                if let expiry = Self.date(item["expire_at"]) {
+                    expirations.append(expiry)
+                }
+            }
+            if !allItems.isEmpty {
+                let active = UsageResets(availableCount: allItems.count, expirations: expirations).active(at: now)
+                if active.availableCount > 0 {
+                    resets = active
+                }
+            }
+        }
         if windows.isEmpty, startWindows.isEmpty || !activeCodingPlans.isEmpty {
             windows = [QuotaWindow(kind: .additional(id: "zai.coding", title: "Coding Plan"), usedPercent: 0, resetsAt: nil, isInactive: true, inactiveDetail: activeCodingPlans.isEmpty ? "No plan" : "Unavailable")]
         }
@@ -206,8 +268,8 @@ actor ZAIProvider: UsageProvider {
                 }
             }
         }
-        return ProviderSnapshot(provider: .zai, planName: activePlans.isEmpty ? (startKnown ? "Free" : nil) : activePlans.joined(separator: " · "), windows: windows, fetchedAt: now,
+        return ProviderSnapshot(provider: .zai, planName: activePlans.isEmpty ? (startKnown ? "Free" : nil) : activePlans.joined(separator: " · "), windows: windows, resets: resets, fetchedAt: now,
             credentialSource: auth.source, accountLabel: "zai-session:" + ZAIAuthStore.hash(auth.source + "\0" + (email ?? auth.token)), accountEmail: email,
-            usageDetails: details, diagnosticWarnings: warnings)
+            usageDetails: details, diagnosticWarnings: ResponseSchemaWatch.deduplicated(warnings))
     }
 }

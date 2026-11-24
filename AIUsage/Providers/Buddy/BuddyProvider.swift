@@ -98,14 +98,43 @@ actor BuddyProvider: UsageProvider {
         warnings += ResponseSchemaWatch.httpHeaders(summary, provider: .buddy, endpoint: "Buddy summary")
         var windows: [QuotaWindow] = [], details: [ProviderUsageDetail] = []
         let entries = packages.values.flatMap { $0 }
+        func entryExpiry(_ entry: [String: Any]) -> Date? {
+            date(entry["DeductionEndTime"] ?? entry["ExpiredTime"] ?? entry["PackageEndTime"])
+        }
+        func earliestExpiry(for code: String) -> Date? {
+            entries.filter { $0["PackageCode"] as? String == code }.compactMap(entryExpiry).min()
+        }
+        let orderedSummaries = summaries.enumerated().sorted { lhs, rhs in
+            let lhsBase = baseCodes.contains((lhs.element["PackageCode"] as? String) ?? "")
+            let rhsBase = baseCodes.contains((rhs.element["PackageCode"] as? String) ?? "")
+            if lhsBase != rhsBase { return lhsBase }
+            if !lhsBase {
+                let lhsDate = (lhs.element["PackageCode"] as? String).flatMap(earliestExpiry)
+                let rhsDate = (rhs.element["PackageCode"] as? String).flatMap(earliestExpiry)
+                switch (lhsDate, rhsDate) {
+                case let (.some(l), .some(r)) where l != r: return l < r
+                case (.some, .none): return true
+                case (.none, .some): return false
+                default: break
+                }
+            }
+            return lhs.offset < rhs.offset
+        }.map(\.element)
         var seen = Set<String>()
-        for row in summaries {
+        for row in orderedSummaries {
             warnings += ResponseSchemaWatch.confirmedJSONKeys(in: row, provider: .buddy, endpoint: "Buddy summary package")
             guard let code = row["PackageCode"] as? String, seen.insert(code).inserted else { details.append(QuotaDiscovery.notice("buddy.summary")); continue }
             let isBase = baseCodes.contains(code)
             let isGift = ["TCACA_code_006_DbXS0lrypC", "TCACA_code_007_nzdH5h4Nl0", "TCACA_code_037_WxOD3MpI2o"].contains(code)
             let title = isBase ? "Credits" : (addOnCodes.contains(code) ? "Add-on" : (isGift ? "Gift credits" : "Additional credits"))
-            let related = entries.filter { $0["PackageCode"] as? String == code }
+            let related = entries.filter { $0["PackageCode"] as? String == code }.enumerated().sorted { lhs, rhs in
+                switch (entryExpiry(lhs.element), entryExpiry(rhs.element)) {
+                case let (.some(l), .some(r)) where l != r: return l < r
+                case (.some, .none): return true
+                case (.none, .some): return false
+                default: return lhs.offset < rhs.offset
+                }
+            }.map(\.element)
             for entry in related { warnings += ResponseSchemaWatch.confirmedJSONKeys(in: entry, provider: .buddy, endpoint: "Buddy package") }
             let total = QuotaDiscovery.number(row["CycleTotalCapacity"]), left = QuotaDiscovery.number(row["CycleRemainCapacity"])
             guard let left, left >= 0 else { details.append(QuotaDiscovery.notice("buddy." + code)); continue }

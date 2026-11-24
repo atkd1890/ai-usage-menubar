@@ -68,7 +68,7 @@ final class QoderProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.credentialSource, "Qoder desktop")
         XCTAssertEqual(snapshot.dashboardSubtitle, "Shared account limits • Qoder & Qoder IDE")
         XCTAssertEqual(snapshot.windows.count, 1)
-        XCTAssertEqual(snapshot.windows[0].kind, .weekly)
+        XCTAssertEqual(snapshot.windows[0].kind, .credits)
         XCTAssertEqual(snapshot.windows[0].usedPercent, 20, accuracy: 0.01)
         XCTAssertEqual(snapshot.windows[0].remainingCount, 240)
         XCTAssertEqual(snapshot.windows[0].limitCount, 300)
@@ -382,6 +382,57 @@ final class QoderProviderTests: XCTestCase {
         XCTAssertEqual(ideSeed.refreshToken, "qoder-ide-ref")
         XCTAssertEqual(ideSeed.email, "ide@example.com")
         XCTAssertEqual(ideSeed.sourceLabel, "Qoder IDE")
+    }
+
+    func testMapsDedicatedResourcePackagesOrgCapAndFractionalPercentage() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let expiryMs = Int64(now.addingTimeInterval(5 * 86_400).timeIntervalSince1970 * 1000)
+        let json = """
+        {
+          "displayMode": "qoder",
+          "qoderUsage": {
+            "userType": "pro",
+            "userQuota": {"total": 2000, "used": 500, "remaining": 1500, "percentage": 0.25},
+            "dedicatedResourcePackages": [
+              {
+                "id": "pkg-sota-1",
+                "name": "SOTA Exclusive",
+                "total": 1000,
+                "used": 250,
+                "remaining": 750,
+                "percentage": 0.25,
+                "unit": "credits",
+                "expiresAt": \(expiryMs)
+              }
+            ],
+            "orgResourcePackage": {"cap": 5000, "used": 1000, "remaining": 4000, "available": true}
+          }
+        }
+        """
+        let snapshot = try QoderProvider.map(
+            usage: httpResponse(200, json: json),
+            plan: nil,
+            email: nil,
+            credentialSource: "Qoder desktop",
+            historyID: "qoder-session:abc",
+            now: now
+        )
+        XCTAssertTrue(snapshot.allDiagnosticWarnings.isEmpty)
+        XCTAssertEqual(snapshot.windows.first?.kind, .credits)
+        XCTAssertEqual(snapshot.windows.first?.usedPercent ?? -1, 25, accuracy: 0.01)
+
+        let dedicated = try XCTUnwrap(snapshot.usageDetails.first { $0.title == "SOTA Exclusive" })
+        XCTAssertEqual(dedicated.value, "750 / 1,000 left")
+        XCTAssertEqual(
+            dedicated.boundedProgress,
+            BoundedCreditProgress(label: "SOTA Exclusive", used: 250, limit: 1000, resetsAt: nil, resetNote: nil)
+        )
+        let expiry = try XCTUnwrap(snapshot.usageDetails.first { $0.title == "SOTA Exclusive expires" })
+        XCTAssertEqual(expiry.targetDate?.timeIntervalSince1970 ?? 0, Double(expiryMs) / 1000, accuracy: 0.1)
+
+        let org = try XCTUnwrap(snapshot.usageDetails.first { $0.id == "qoder.org.credits" })
+        XCTAssertEqual(org.value, "1,000 / 5,000")
+        XCTAssertEqual(org.boundedProgress?.limit, 5000)
     }
 }
 

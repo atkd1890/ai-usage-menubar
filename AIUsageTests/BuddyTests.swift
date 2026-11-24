@@ -173,4 +173,40 @@ extension BuddyTests {
         XCTAssertTrue(requests.allSatisfy { $0.url.host == "www.codebuddy.ai" && $0.headers["Authorization"] == "Bearer fake-current" })
         XCTAssertEqual(Set(requests.map { $0.url.path }), ["/console/accounts", "/billing/meter/get-user-resource-summary", "/billing/meter/get-user-resource-free-packages", "/billing/meter/get-user-resource-paid-packages"])
     }
+
+    func testSortsAdditionalCreditPoolsAndPackagesBySoonestExpiryFIFO() throws {
+        let addon = "TCACA_code_009_0XmEQc2xOf"
+        let laterExpiry = 1_900_000_000_000
+        let soonerExpiry = 1_800_000_000_000
+        let summaryData: [String: Any] = [
+            "code": 0,
+            "data": [
+                "SubscriptionPackageName": "Pro",
+                "IsPaidUser": true,
+                "Packages": [
+                    ["PackageCode": base, "CycleTotalCapacity": 1000, "CycleRemainCapacity": 800],
+                    ["PackageCode": addon, "CycleTotalCapacity": 500, "CycleRemainCapacity": 500],
+                    ["PackageCode": gift, "CycleTotalCapacity": 200, "CycleRemainCapacity": 150]
+                ]
+            ]
+        ]
+        let summaryResp = HTTPResponse(statusCode: 200, headers: [:], body: try JSONSerialization.data(withJSONObject: summaryData))
+        let snapshot = try BuddyProvider.map(summary: summaryResp, packages: [
+            "paid": [
+                ["PackageCode": base, "ResourceId": "res-base", "CapacityType": 4, "CycleStartTime": "2026-11-01 00:00:00", "CycleEndTime": "2026-11-30 23:59:59", "DeductionEndTime": 2_000_000_000_000],
+                ["PackageCode": addon, "ResourceId": "res-addon-later", "DeductionEndTime": laterExpiry, "CapacityRemainPrecise": 300],
+                ["PackageCode": addon, "ResourceId": "res-addon-sooner", "DeductionEndTime": soonerExpiry + 100_000_000, "CapacityRemainPrecise": 200]
+            ],
+            "free": [
+                ["PackageCode": gift, "ResourceId": "res-gift", "DeductionEndTime": soonerExpiry]
+            ]
+        ], source: "CodeBuddy desktop", accountID: "fake-id")
+
+        let creditTitles = snapshot.usageDetails.filter { $0.id.hasSuffix(".credits") }.map(\.title)
+        XCTAssertEqual(creditTitles, ["Gift credits", "Add-on"])
+
+        let addonExpiries = snapshot.usageDetails.filter { $0.title == "Add-on expires" }.compactMap(\.targetDate)
+        XCTAssertEqual(addonExpiries.count, 2)
+        XCTAssertLessThan(addonExpiries[0], addonExpiries[1])
+    }
 }

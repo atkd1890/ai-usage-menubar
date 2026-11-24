@@ -264,8 +264,13 @@ actor ConsumerQuotaProvider: UsageProvider {
         var details: [ProviderUsageDetail] = []
         if let maximum = number(data["maxRefreshCredits"]), maximum > 0,
            let remaining = number(data["refreshCredits"]), (0...maximum).contains(remaining) {
+            let refreshKind: QuotaKind = switch ProviderParsing.string(data["refreshInterval"])?.lowercased() {
+            case "weekly": .weekly
+            case "monthly": .monthly
+            default: .daily
+            }
             windows.append(QuotaWindow(
-                kind: .daily,
+                kind: refreshKind,
                 usedPercent: (maximum - remaining) / maximum * 100,
                 resetsAt: date(data["nextRefreshTime"]),
                 remainingCount: remaining,
@@ -283,22 +288,31 @@ actor ConsumerQuotaProvider: UsageProvider {
             ))
         }
         var creditParts: [String] = []
-        if let free = number(data["freeCredits"]), free > 0 {
+        var hasCreditBalance = false
+        if let free = number(data["freeCredits"]), free >= 0 {
             creditParts.append("Free \(Int(free.rounded()).formatted(.number))")
+            hasCreditBalance = true
         }
-        if let addOn = number(data["addOnCredits"]), addOn > 0 {
+        if let bonus = number(data["bonusCredits"]), bonus >= 0 {
+            creditParts.append("Bonus \(Int(bonus.rounded()).formatted(.number))")
+            hasCreditBalance = true
+        }
+        if let addOn = number(data["addOnCredits"]), addOn >= 0 {
             creditParts.append("Add-on \(Int(addOn.rounded()).formatted(.number))")
+            hasCreditBalance = true
         }
-        if let total = number(data["totalCredits"]), total > 0 {
+        if let total = number(data["totalCredits"]), total >= 0 {
             creditParts.append("Total \(Int(total.rounded()).formatted(.number))")
+            hasCreditBalance = true
         }
         details.append(ProviderUsageDetail(
             id: "manus.credits",
             title: "Additional Credits",
             value: creditParts.isEmpty ? "N/A" : creditParts.joined(separator: " · ")
         ))
-        guard !windows.isEmpty else { throw ProviderFailure(.invalidResponse, "Manus returned no bounded quota.") }
-        if !windows.contains(where: { $0.kind == .additional(id: "manus.monthly", title: "Monthly") }) {
+        guard !windows.isEmpty || hasCreditBalance else { throw ProviderFailure(.invalidResponse, "Manus returned no bounded quota.") }
+        if !windows.contains(where: { $0.kind == .additional(id: "manus.monthly", title: "Monthly") }),
+           !windows.isEmpty || data["proMonthlyCredits"] != nil {
             windows.append(QuotaWindow(
                 kind: .additional(id: "manus.monthly", title: "Monthly"),
                 usedPercent: 0,
@@ -389,7 +403,8 @@ actor ConsumerQuotaProvider: UsageProvider {
                     for (suffix, title, detail, length) in entries {
                         let id = "kimi.code." + scope + "." + suffix
                         if let maximum = number(detail["limit"]), maximum > 0,
-                           let remaining = number(detail["remaining"]), (0...maximum).contains(remaining) {
+                           let remaining = number(detail["remaining"]) ?? number(detail["used"]).map({ max(maximum - $0, 0) }),
+                           (0...maximum).contains(remaining) {
                             let kind = QuotaKind.additional(id: id, title: title)
                             if !windows.contains(where: { $0.kind == kind }) {
                                 let reset = date(detail["resetTime"])

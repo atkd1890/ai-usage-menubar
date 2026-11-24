@@ -218,8 +218,8 @@ enum ProviderID: String, CaseIterable, Codable, Identifiable, Sendable {
         case .zai: .session
         case .dola: .additional(id: "dola.usage", title: "Usage")
         case .cursor: .totalUsage
-        case .copilot: .credits
-        case .claude, .codex, .antigravity, .gemini, .muse, .qwen, .minimax, .qoder: .weekly
+        case .copilot, .qoder: .credits
+        case .claude, .codex, .antigravity, .gemini, .muse, .qwen, .minimax: .weekly
         }
     }
 }

@@ -85,7 +85,11 @@ enum ConfirmedSchemaCatalog {
         "ZCode plan": EndpointConfirmedSchema(jsonKeys: ["plan_id", "user_plan_id", "name", "description", "priority", "status", "starts_at", "ends_at", "entitlements"], enums: ["status": ["active"]]),
         "ZCode entitlement": EndpointConfirmedSchema(jsonKeys: ["entitlement_id", "grant_units", "show_name", "capabilities", "effective_at", "meter", "period", "priority", "unit_type"], enums: ["period": ["daily", "weekly", "monthly", "once"]]),
         "ZCode balance": EndpointConfirmedSchema(jsonKeys: ["plans", "balances", "server_time"]),
-        "ZCode bucket": EndpointConfirmedSchema(jsonKeys: ["bucket_id", "user_plan_id", "plan_id", "entitlement_id", "show_name", "capabilities", "total_units", "used_units", "remaining_units", "available_units", "entitlement_priority", "plan_priority", "priority", "unit_type", "meter", "expires_at", "period_start", "period_end"])
+        "ZCode bucket": EndpointConfirmedSchema(jsonKeys: ["bucket_id", "user_plan_id", "plan_id", "entitlement_id", "show_name", "capabilities", "total_units", "used_units", "remaining_units", "available_units", "entitlement_priority", "plan_priority", "priority", "unit_type", "meter", "expires_at", "period_start", "period_end"]),
+        "ZCode reset status": EndpointConfirmedSchema(jsonKeys: ["available_five_hour_resets", "available_week_resets", "latest_five_hour_reset_history", "latest_week_reset_history", "has_unread_history"]),
+        "ZCode reset item": EndpointConfirmedSchema(jsonKeys: ["expire_at"]),
+        "ZCode mcp usage": EndpointConfirmedSchema(jsonKeys: ["server_time", "next_refresh_at", "level", "total_usage"]),
+        "ZCode mcp total_usage": EndpointConfirmedSchema(jsonKeys: ["used", "limit", "remaining"])
     ])
 
     private static let dola = ProviderConfirmedSchema(endpoints: [
@@ -134,8 +138,8 @@ enum ConfirmedSchemaCatalog {
                 "remaining_dollars", "used_dollars", "locked_reason"
             ]
         ),
-        // Displayed: is_enabled, monthly_limit, used_credits, currency, decimal_places.
-        // Confirmed-ignored: utilization, credits_ever_enabled, credits_can_pay, daily, weekly, disabled_reason, spend_limit_reached, user_disabled.
+        // Displayed: is_enabled, monthly_limit, used_credits, currency, decimal_places, spend_limit_reached.
+        // Confirmed-ignored: utilization, credits_ever_enabled, credits_can_pay, daily, weekly, disabled_reason, user_disabled.
         "Claude extra_usage": EndpointConfirmedSchema(
             jsonKeys: [
                 "is_enabled", "monthly_limit", "used_credits", "utilization",
@@ -143,8 +147,8 @@ enum ConfirmedSchemaCatalog {
                 "daily", "weekly", "disabled_reason", "spend_limit_reached", "user_disabled"
             ]
         ),
-        // Displayed: enabled, used, limit, balance.
-        // Confirmed-ignored: auto_reload, can_purchase_credits, can_toggle, cap, disabled_reason, disclaimer, percent, severity.
+        // Displayed: enabled, used, limit, balance, auto_reload.
+        // Confirmed-ignored: can_purchase_credits, can_toggle, cap, disabled_reason, disclaimer, percent, severity.
         "Claude spend": EndpointConfirmedSchema(
             jsonKeys: [
                 "enabled", "used", "limit", "balance", "auto_reload",
@@ -223,7 +227,7 @@ enum ConfirmedSchemaCatalog {
         "Codex rate_limit_reset_credits": EndpointConfirmedSchema(
             jsonKeys: ["available_count", "applicable_available_count"]
         ),
-        // Confirmed-ignored: individual_limit, reached.
+        // Displayed: reached (when true). Confirmed-ignored: individual_limit.
         "Codex spend_control": EndpointConfirmedSchema(
             jsonKeys: ["individual_limit", "reached"]
         ),
@@ -397,7 +401,7 @@ enum ConfirmedSchemaCatalog {
         "Adobe": EndpointConfirmedSchema(
             jsonKeys: ["total", "credits"]
         ),
-        // Displayed: availableUntil, quota. Confirmed-ignored: planCap.
+        // Displayed: availableUntil, planCap, quota.
         "Adobe total": EndpointConfirmedSchema(
             jsonKeys: ["availableUntil", "planCap", "quota"],
             enums: ["planCap": ["HARD", "SOFT"]]
@@ -419,8 +423,8 @@ enum ConfirmedSchemaCatalog {
 
     // MARK: - 7. Manus
     private static let manus = ProviderConfirmedSchema(endpoints: [
-        // Displayed: totalCredits, freeCredits, refreshCredits, maxRefreshCredits, nextRefreshTime, periodicCredits, proMonthlyCredits, addOnCredits.
-        // Confirmed-ignored: refreshInterval, bonusCredits, paidCredits, usedCredits, plan, tier, userFlag.
+        // Displayed: totalCredits, freeCredits, bonusCredits, refreshCredits, maxRefreshCredits, nextRefreshTime, refreshInterval, periodicCredits, proMonthlyCredits, addOnCredits.
+        // Confirmed-ignored: paidCredits, usedCredits, plan, tier, userFlag.
         "Manus": EndpointConfirmedSchema(
             jsonKeys: [
                 "totalCredits", "freeCredits", "refreshCredits", "maxRefreshCredits",
@@ -504,15 +508,19 @@ enum ConfirmedSchemaCatalog {
         "MiniMax remains": EndpointConfirmedSchema(
             jsonKeys: ["model_remains", "base_resp"]
         ),
-        // Displayed: model_name, current_interval_*_percent/count, current_weekly_*_percent, end_time, weekly_end_time.
-        // Confirmed-ignored: remains_time, start_time, weekly_start_time, current_interval_usage_count.
+        // Displayed: model_name, current_interval_*_percent/count/status, current_weekly_*_percent/status, end_time, weekly_end_time, remains_time, weekly_remains_time.
+        // Confirmed-ignored: start_time, weekly_start_time.
         "MiniMax model_remains": EndpointConfirmedSchema(
             jsonKeys: [
                 "model_name", "current_interval_total_percent",
-                "current_interval_used_percent", "current_weekly_total_percent",
-                "current_weekly_used_percent", "current_interval_total_count",
-                "current_interval_used_count", "current_interval_usage_count",
-                "remains_time", "start_time", "end_time",
+                "current_interval_used_percent", "current_interval_remaining_percent",
+                "current_interval_status",
+                "current_weekly_total_percent", "current_weekly_used_percent",
+                "current_weekly_remaining_percent", "current_weekly_status",
+                "current_interval_total_count", "current_interval_used_count",
+                "current_interval_usage_count",
+                "remains_time", "weekly_remains_time",
+                "start_time", "end_time",
                 "weekly_start_time", "weekly_end_time"
             ]
         ),
@@ -525,8 +533,8 @@ enum ConfirmedSchemaCatalog {
                 "token_plan_credit_fallback_enabled", "total_credits", "used_credits"
             ]
         ),
-        // Displayed: token_plan_tier, plan_name, op_credit_summary, opcredit_balance, total_remains_credit, op_group_id, email, user_email.
-        // Confirmed-ignored: can_upgrade, daily_login_gift_credit_remaining, expires_at, has_token_plan, is_migrated_to_op,
+        // Displayed: token_plan_tier, plan_name, op_credit_summary, opcredit_balance, total_remains_credit, daily_login_gift_credit_remaining, op_group_id, email, user_email.
+        // Confirmed-ignored: can_upgrade, expires_at, has_token_plan, is_migrated_to_op,
         //   is_pro_builder, next_plan_name, pending_credit, plan_type, purchase_source, subscription_type, upgrade_action, will_renewal.
         "MiniMax membership": EndpointConfirmedSchema(
             jsonKeys: [
@@ -581,13 +589,13 @@ enum ConfirmedSchemaCatalog {
             jsonKeys: ["displayMode", "qoderUsage", "enterpriseUsage"],
             enums: ["displayMode": ["qoder", "enterprise"]]
         ),
-        // Displayed: userId, userType, expiresAt, refreshAt, userQuota, addOnQuota, orgResourcePackage.
-        // Confirmed-ignored: usageType, totalUsagePercentage, isQuotaExceeded, isPlanQuotaProrated, upgradeUrl.
+        // Displayed: userId, userType, expiresAt, refreshAt, userQuota, addOnQuota, orgResourcePackage, dedicatedResourcePackages.
+        // Confirmed-ignored: usageType, totalUsagePercentage, isQuotaExceeded, isPlanQuotaProrated, isHighestTier, upgradeUrl.
         "Qoder usage": EndpointConfirmedSchema(
             jsonKeys: [
                 "userId", "userType", "usageType", "totalUsagePercentage",
-                "isQuotaExceeded", "isPlanQuotaProrated", "expiresAt", "refreshAt",
-                "upgradeUrl", "userQuota", "addOnQuota", "orgResourcePackage"
+                "isQuotaExceeded", "isPlanQuotaProrated", "isHighestTier", "expiresAt", "refreshAt",
+                "upgradeUrl", "userQuota", "addOnQuota", "orgResourcePackage", "dedicatedResourcePackages"
             ],
             requiredJSONKeys: ["userQuota"],
             enums: [
@@ -598,9 +606,17 @@ enum ConfirmedSchemaCatalog {
                 ]
             ]
         ),
-        // Displayed: remaining, total, used, percentage. Confirmed-ignored: detailUrl, unit.
+        // Displayed: remaining, total, used, percentage, cap. Confirmed-ignored: detailUrl, unit, available.
         "Qoder quota": EndpointConfirmedSchema(
-            jsonKeys: ["detailUrl", "percentage", "remaining", "total", "unit", "used"]
+            jsonKeys: ["available", "cap", "detailUrl", "percentage", "remaining", "total", "unit", "used"]
+        ),
+        // Displayed: id, name, total, used, remaining, percentage, expiresAt/expires_at.
+        "Qoder dedicated package": EndpointConfirmedSchema(
+            jsonKeys: [
+                "id", "name", "description", "total", "used", "remaining",
+                "percentage", "unit", "expiresAt", "expires_at",
+                "available", "status", "displayLabels", "display_labels"
+            ]
         ),
         // Displayed: plan_tier_name / planName.
         // Confirmed-ignored: end_date, feature_allowed, is_highest_tier, is_paid_plan, is_personal_version, start_date, user_type.

@@ -161,6 +161,13 @@ enum CodexUsageMapper {
                 provider: .codex,
                 endpoint: "Codex spend_control"
             )
+            if spendControl["reached"] as? Bool == true {
+                details.append(ProviderUsageDetail(
+                    id: "codex.spend_control.reached",
+                    title: "Spend limit",
+                    value: "Reached"
+                ))
+            }
         }
         if let resetCreditList {
             warnings += resetCreditList.diagnosticWarnings

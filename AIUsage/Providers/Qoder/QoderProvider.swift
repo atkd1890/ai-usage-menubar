@@ -542,7 +542,7 @@ actor QoderProvider: UsageProvider {
 
         if let userQuota = ProviderParsing.object(qoderUsage["userQuota"]) {
             warnings += ResponseSchemaWatch.confirmedJSONKeys(in: userQuota, provider: .qoder, endpoint: "Qoder quota")
-            if let window = mapQuotaWindow(userQuota, kind: .weekly, resetsAt: resetsAt) {
+            if let window = mapQuotaWindow(userQuota, kind: .credits, resetsAt: resetsAt) {
                 windows.append(window)
             }
         }
@@ -554,8 +554,12 @@ actor QoderProvider: UsageProvider {
                 hasAddOnCredits = true
             }
         }
+        if let dedicatedPackages = qoderUsage["dedicatedResourcePackages"] as? [[String: Any]] {
+            details.append(contentsOf: mapDedicatedPackages(dedicatedPackages, warnings: &warnings))
+        }
         if let orgPackage = ProviderParsing.object(qoderUsage["orgResourcePackage"]),
            let detail = mapOrgResourcePackage(orgPackage) {
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(in: orgPackage, provider: .qoder, endpoint: "Qoder quota")
             details.append(detail)
         }
         if !windows.isEmpty && !hasAddOnCredits {
@@ -599,7 +603,12 @@ actor QoderProvider: UsageProvider {
         let remaining = QuotaDiscovery.number(quota["remaining"]) ?? used.map { max(total - $0, 0) }
         guard let remaining else { return nil }
         let effectiveUsed = used ?? max(total - remaining, 0)
-        let rawPercent = QuotaDiscovery.number(quota["percentage"]) ?? (effectiveUsed / total * 100)
+        let rawPercent: Double
+        if let reported = QuotaDiscovery.number(quota["percentage"]) {
+            rawPercent = (reported > 0 && reported <= 1 && (effectiveUsed / total) > 0.015) ? reported * 100 : reported
+        } else {
+            rawPercent = effectiveUsed / total * 100
+        }
         return QuotaWindow(
             kind: kind,
             usedPercent: min(max(rawPercent, 0), 100),
@@ -607,6 +616,47 @@ actor QoderProvider: UsageProvider {
             remainingCount: remaining,
             limitCount: total
         )
+    }
+
+    private static func mapDedicatedPackages(
+        _ packages: [[String: Any]],
+        warnings: inout [ProviderDiagnosticWarning]
+    ) -> [ProviderUsageDetail] {
+        var result: [ProviderUsageDetail] = []
+        for package in packages {
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(in: package, provider: .qoder, endpoint: "Qoder dedicated package")
+            guard let total = QuotaDiscovery.number(package["total"]), total > 0 else { continue }
+            let used = QuotaDiscovery.number(package["used"])
+            guard let remaining = QuotaDiscovery.number(package["remaining"]) ?? used.map({ max(total - $0, 0) }) else {
+                continue
+            }
+            let effectiveUsed = used ?? max(total - remaining, 0)
+            let rawTitle = ProviderParsing.string(package["name"])?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let title = (rawTitle?.isEmpty == false) ? rawTitle! : "Dedicated Credits"
+            let rawKey = ProviderParsing.string(package["id"])?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let keyHash = sha256Hex((rawKey?.isEmpty == false) ? rawKey! : title)
+            result.append(ProviderUsageDetail(
+                id: "qoder.dedicated.\(keyHash).credits",
+                title: title,
+                value: "\(formatCount(remaining)) / \(formatCount(total)) left",
+                boundedProgress: BoundedCreditProgress(
+                    label: title,
+                    used: effectiveUsed,
+                    limit: total,
+                    resetsAt: nil,
+                    resetNote: nil
+                )
+            ))
+            if let expiry = ProviderParsing.date(package["expiresAt"] ?? package["expires_at"]) {
+                result.append(ProviderUsageDetail(
+                    id: "qoder.dedicated.\(keyHash).expiry",
+                    title: "\(title) expires",
+                    value: expiry.formatted(date: .abbreviated, time: .shortened),
+                    targetDate: expiry
+                ))
+            }
+        }
+        return result
     }
 
     private static func mapAddOnCredits(_ quota: [String: Any]) -> ProviderUsageDetail? {
@@ -634,7 +684,7 @@ actor QoderProvider: UsageProvider {
 
     private static func mapOrgResourcePackage(_ package: [String: Any]) -> ProviderUsageDetail? {
         let used = QuotaDiscovery.number(package["used"])
-        let total = QuotaDiscovery.number(package["total"])
+        let total = QuotaDiscovery.number(package["total"]) ?? QuotaDiscovery.number(package["cap"])
         let remaining = QuotaDiscovery.number(package["remaining"])
         let value: String
         let boundedProgress: BoundedCreditProgress?

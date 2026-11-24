@@ -753,62 +753,108 @@ actor MiniMaxProvider: UsageProvider {
                 )
             }
             if !models.isEmpty {
-                let primary = models.first { ProviderParsing.string($0["model_name"]) == "general" }
-                    ?? models.first {
+                let primaryIndex = models.firstIndex { ProviderParsing.string($0["model_name"]) == "general" }
+                    ?? models.firstIndex {
                         guard let name = ProviderParsing.string($0["model_name"]) else { return true }
-                        return name.range(of: "video", options: .caseInsensitive) == nil
+                        return !Self.isMultimodalModelName(name)
                     }
-                    ?? models.first
-                if let primary {
-                    let intervalTotal = parsePercent(primary["current_interval_total_percent"])
-                    let intervalUsed = parsePercent(primary["current_interval_used_percent"])
-                    if intervalTotal != nil || intervalUsed != nil {
-                        let total = (intervalTotal ?? 0) > 0 ? intervalTotal! : 100
-                        let used = max(intervalUsed ?? 0, 0)
-                        let pct = min(max((used / total) * 100, 0), 100)
+                    ?? models.indices.first
+                if let primaryIndex {
+                    let primary = models[primaryIndex]
+                    let sessionReset = ProviderParsing.date(primary["end_time"])
+                        ?? Self.msDurationReset(primary["remains_time"], now: now)
+                    if QuotaDiscovery.number(primary["current_interval_status"]) == 3 {
+                        windows.append(QuotaWindow(
+                            kind: .session,
+                            usedPercent: 0,
+                            resetsAt: sessionReset,
+                            isUnlimited: true
+                        ))
+                    } else if let pct = Self.intervalUsedPercent(primary) {
                         windows.append(QuotaWindow(
                             kind: .session,
                             usedPercent: pct,
-                            resetsAt: ProviderParsing.date(primary["end_time"]),
+                            resetsAt: sessionReset,
                             startsAt: ProviderParsing.date(primary["start_time"])
                         ))
                     }
 
-                    let weeklyTotal = parsePercent(primary["current_weekly_total_percent"])
-                    let weeklyUsed = parsePercent(primary["current_weekly_used_percent"])
-                    if weeklyTotal != nil || weeklyUsed != nil {
-                        let total = (weeklyTotal ?? 0) > 0 ? weeklyTotal! : 100
-                        let used = max(weeklyUsed ?? 0, 0)
-                        let pct = min(max((used / total) * 100, 0), 100)
+                    let weeklyReset = ProviderParsing.date(primary["weekly_end_time"])
+                        ?? Self.msDurationReset(primary["weekly_remains_time"], now: now)
+                    if QuotaDiscovery.number(primary["current_weekly_status"]) == 3 {
+                        windows.append(QuotaWindow(
+                            kind: .weekly,
+                            usedPercent: 0,
+                            resetsAt: weeklyReset,
+                            isUnlimited: true
+                        ))
+                    } else if let pct = Self.weeklyUsedPercent(primary) {
                         windows.append(QuotaWindow(
                             kind: .weekly,
                             usedPercent: pct,
-                            resetsAt: ProviderParsing.date(primary["weekly_end_time"]),
+                            resetsAt: weeklyReset,
                             startsAt: ProviderParsing.date(primary["weekly_start_time"])
                         ))
                     }
                 }
 
-                if let video = models.first(where: {
-                    guard let name = ProviderParsing.string($0["model_name"]),
-                          name.range(of: "video", options: .caseInsensitive) != nil,
-                          let total = QuotaDiscovery.number($0["current_interval_total_count"]),
-                          total > 0 else {
-                        return false
+                var usedVideoKind = false
+                for (index, model) in models.enumerated() where index != primaryIndex {
+                    let rawName = ProviderParsing.string(model["model_name"])?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "model-\(index)"
+                    let kind: QuotaKind
+                    if !usedVideoKind && rawName.range(of: "video", options: .caseInsensitive) != nil {
+                        kind = .additional(id: "minimax.video", title: "Video")
+                        usedVideoKind = true
+                    } else {
+                        let slug = Self.modelSlug(rawName)
+                        let title = Self.modelDisplayTitle(rawName)
+                        kind = .additional(id: "minimax.model.\(slug)", title: title)
                     }
-                    return true
-                }),
-                   let total = QuotaDiscovery.number(video["current_interval_total_count"]), total > 0 {
-                    let used = max(QuotaDiscovery.number(video["current_interval_used_count"]) ?? 0, 0)
-                    let remaining = max(total - used, 0)
-                    windows.append(QuotaWindow(
-                        kind: .additional(id: "minimax.video", title: "Video"),
-                        usedPercent: min(max((used / total) * 100, 0), 100),
-                        resetsAt: ProviderParsing.date(video["end_time"]),
-                        startsAt: ProviderParsing.date(video["start_time"]),
-                        remainingCount: remaining,
-                        limitCount: total
-                    ))
+                    guard !windows.contains(where: { $0.kind == kind }) else { continue }
+                    let reset = ProviderParsing.date(model["end_time"])
+                        ?? Self.msDurationReset(model["remains_time"], now: now)
+                    if QuotaDiscovery.number(model["current_interval_status"]) == 3 {
+                        windows.append(QuotaWindow(
+                            kind: kind,
+                            usedPercent: 0,
+                            resetsAt: reset,
+                            isUnlimited: true
+                        ))
+                    } else if let total = QuotaDiscovery.number(model["current_interval_total_count"]), total > 0 {
+                        let usedCount: Double?
+                        if let explicitUsed = QuotaDiscovery.number(model["current_interval_used_count"]) {
+                            usedCount = max(explicitUsed, 0)
+                        } else if let remainingCount = QuotaDiscovery.number(model["current_interval_usage_count"]) {
+                            usedCount = max(total - max(remainingCount, 0), 0)
+                        } else {
+                            usedCount = nil
+                        }
+                        if let usedCount {
+                            let remaining = max(total - usedCount, 0)
+                            windows.append(QuotaWindow(
+                                kind: kind,
+                                usedPercent: min(max((usedCount / total) * 100, 0), 100),
+                                resetsAt: reset,
+                                startsAt: ProviderParsing.date(model["start_time"]),
+                                remainingCount: remaining,
+                                limitCount: total
+                            ))
+                        } else if let pct = Self.intervalUsedPercent(model) {
+                            windows.append(QuotaWindow(
+                                kind: kind,
+                                usedPercent: pct,
+                                resetsAt: reset,
+                                startsAt: ProviderParsing.date(model["start_time"])
+                            ))
+                        }
+                    } else if let pct = Self.intervalUsedPercent(model) {
+                        windows.append(QuotaWindow(
+                            kind: kind,
+                            usedPercent: pct,
+                            resetsAt: reset,
+                            startsAt: ProviderParsing.date(model["start_time"])
+                        ))
+                    }
                 }
             }
         }
@@ -828,6 +874,8 @@ actor MiniMaxProvider: UsageProvider {
 
         var agentCreditsAmount: Double?
         var agentCreditsTotal: Double?
+        var agentCreditsFromTokenPlan = false
+        var agentCreditsFromMembership = false
         if let tokenPlanCredit, tokenPlanCredit.statusCode == 200,
            let creditObj = try? ProviderParsing.object(from: tokenPlanCredit.body) {
             warnings += ResponseSchemaWatch.confirmedJSONKeys(
@@ -836,15 +884,21 @@ actor MiniMaxProvider: UsageProvider {
                 endpoint: "MiniMax tokenPlanCredit"
             )
             let breakdown = ProviderParsing.object(creditObj["balance_breakdown"])
-            agentCreditsAmount = QuotaDiscovery.number(creditObj["remaining_credits"])
-                ?? QuotaDiscovery.number(breakdown?["total_balance"])
+            if let value = QuotaDiscovery.number(creditObj["remaining_credits"])
+                ?? QuotaDiscovery.number(breakdown?["total_balance"]) {
+                agentCreditsAmount = value
+                agentCreditsFromTokenPlan = true
+            }
             agentCreditsTotal = QuotaDiscovery.number(creditObj["total_credits"])
         }
         if (agentCreditsAmount ?? 0) <= 0, let membershipRoot {
             let opSummary = ProviderParsing.object(membershipRoot["op_credit_summary"])
-            agentCreditsAmount = QuotaDiscovery.number(opSummary?["total_remaining_amount"])
+            if let value = QuotaDiscovery.number(opSummary?["total_remaining_amount"])
                 ?? QuotaDiscovery.number(membershipRoot["opcredit_balance"])
-                ?? QuotaDiscovery.number(membershipRoot["total_remains_credit"])
+                ?? QuotaDiscovery.number(membershipRoot["total_remains_credit"]) {
+                agentCreditsAmount = value
+                agentCreditsFromMembership = true
+            }
         }
 
         if !hasActiveTokenPlan {
@@ -889,8 +943,13 @@ actor MiniMaxProvider: UsageProvider {
         let hailuoWallet = walletEntries.first { QuotaDiscovery.number($0["source"]) == 0 }
 
         var creditParts: [String] = []
-        if !hasActiveTokenPlan, let agentCreditsAmount, agentCreditsAmount > 0 {
+        if !hasActiveTokenPlan, let agentCreditsAmount,
+           (agentCreditsAmount > 0 || agentCreditsFromMembership) {
             creditParts.append("Agent \(formatCredits(agentCreditsAmount))")
+        }
+        if let gift = QuotaDiscovery.number(membershipRoot?["daily_login_gift_credit_remaining"]),
+           gift > 0 {
+            creditParts.append("Gift \(formatCredits(gift))")
         }
         if let designWallet, let designCredits = QuotaDiscovery.number(designWallet["total_credit"]) {
             creditParts.append("Design \(formatCredits(designCredits))")
@@ -935,7 +994,7 @@ actor MiniMaxProvider: UsageProvider {
                         resetNote: "No reset"
                     )
                 ))
-            } else if agentCreditsAmount > 0 {
+            } else if agentCreditsAmount > 0 || agentCreditsFromTokenPlan || agentCreditsFromMembership {
                 details.append(ProviderUsageDetail(
                     id: "minimax.agent.credits",
                     title: "Token Plan Credits",
@@ -991,6 +1050,58 @@ actor MiniMaxProvider: UsageProvider {
             usageDetails: details,
             diagnosticWarnings: ResponseSchemaWatch.deduplicated(warnings)
         )
+    }
+
+    private static func isMultimodalModelName(_ name: String) -> Bool {
+        ["video", "speech", "audio", "image", "music"].contains {
+            name.range(of: $0, options: .caseInsensitive) != nil
+        }
+    }
+
+    private static func modelSlug(_ name: String) -> String {
+        let lower = name.lowercased()
+        let parts = lower.split { !$0.isLetter && !$0.isNumber }
+        return parts.isEmpty ? sha256Hex(name) : parts.joined(separator: "-")
+    }
+
+    private static func modelDisplayTitle(_ name: String) -> String {
+        var trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        for prefix in ["minimax-", "minimax_"] {
+            if trimmed.lowercased().hasPrefix(prefix), trimmed.count > prefix.count {
+                trimmed = String(trimmed.dropFirst(prefix.count))
+                break
+            }
+        }
+        return QuotaDiscovery.name(trimmed)
+    }
+
+    private static func msDurationReset(_ value: Any?, now: Date) -> Date? {
+        guard let ms = QuotaDiscovery.number(value), ms > 0 else { return nil }
+        return now.addingTimeInterval(ms / 1000)
+    }
+
+    private static func intervalUsedPercent(_ object: [String: Any]) -> Double? {
+        if let remaining = parsePercent(object["current_interval_remaining_percent"]) {
+            return min(max(100 - remaining, 0), 100)
+        }
+        let intervalTotal = parsePercent(object["current_interval_total_percent"])
+        let intervalUsed = parsePercent(object["current_interval_used_percent"])
+        guard intervalTotal != nil || intervalUsed != nil else { return nil }
+        let total = (intervalTotal ?? 0) > 0 ? intervalTotal! : 100
+        let used = max(intervalUsed ?? 0, 0)
+        return min(max((used / total) * 100, 0), 100)
+    }
+
+    private static func weeklyUsedPercent(_ object: [String: Any]) -> Double? {
+        if let remaining = parsePercent(object["current_weekly_remaining_percent"]) {
+            return min(max(100 - remaining, 0), 100)
+        }
+        let weeklyTotal = parsePercent(object["current_weekly_total_percent"])
+        let weeklyUsed = parsePercent(object["current_weekly_used_percent"])
+        guard weeklyTotal != nil || weeklyUsed != nil else { return nil }
+        let total = (weeklyTotal ?? 0) > 0 ? weeklyTotal! : 100
+        let used = max(weeklyUsed ?? 0, 0)
+        return min(max((used / total) * 100, 0), 100)
     }
 
     static func parsePercent(_ value: Any?) -> Double? {

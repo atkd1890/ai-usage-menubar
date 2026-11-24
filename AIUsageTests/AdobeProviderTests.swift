@@ -255,4 +255,55 @@ final class AdobeProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.windows[1].inactiveDetail, "No Firefly plan")
         XCTAssertEqual(snapshot.availableMenuBarItems.map(\.metric), [.monthly])
     }
+
+    func testMapsAdditionalCreditPoolsPlanCapAndDetailsOnlyResponse() throws {
+        let multiJSON = """
+        {
+          "total": {
+            "quota": {"total": 4000, "used": 1000, "available": 3000},
+            "planCap": "SOFT",
+            "availableUntil": "2026-12-04T05:12:58.886Z"
+          },
+          "credits": {
+            "firefly_plan_credit": {"quota": {"total": 4000, "used": 0, "available": 4000}},
+            "video_bonus_credit": {"quota": {"total": 500, "used": 100, "available": 400}},
+            "promo_gift_credit": {"quota": {"available": 150}}
+          }
+        }
+        """
+        let multi = try AdobeProvider.map(
+            data: Data(multiJSON.utf8),
+            accessToken: sampleJWT,
+            credentialSource: "Edge Default",
+            now: Date()
+        )
+        XCTAssertEqual(multi.windows.map(\.kind), [
+            .monthly,
+            .firefly,
+            .additional(id: "adobe.video_bonus_credit", title: "Video Bonus Credit")
+        ])
+        XCTAssertEqual(multi.windows[2].remainingCount, 400)
+        XCTAssertEqual(multi.windows[2].limitCount, 500)
+        XCTAssertEqual(multi.usageDetails, [
+            ProviderUsageDetail(id: "adobe.promo_gift_credit.credits", title: "Promo Gift Credit", value: "150 credits"),
+            ProviderUsageDetail(id: "adobe.plan_cap", title: "Credit cap", value: "Soft")
+        ])
+
+        let detailsOnlyJSON = """
+        {
+          "credits": {
+            "promo_gift_credit": {"quota": {"available": 25}}
+          }
+        }
+        """
+        let detailsOnly = try AdobeProvider.map(
+            data: Data(detailsOnlyJSON.utf8),
+            accessToken: sampleJWT,
+            credentialSource: "Edge Default",
+            now: Date()
+        )
+        XCTAssertTrue(detailsOnly.windows.isEmpty)
+        XCTAssertTrue(detailsOnly.hasPanelContent)
+        XCTAssertEqual(detailsOnly.usageDetails.first?.value, "25 credits")
+    }
 }
