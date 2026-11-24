@@ -23,7 +23,18 @@ actor BuddyProvider: UsageProvider {
             return HTTPRequest(method: body == nil ? .get : .post, url: URL(string: "https://" + auth.host + path)!, headers: headers,
                 body: try body.map { try JSONSerialization.data(withJSONObject: $0) })
         }
-        let accounts = try Self.body(await http.send(request("/console/accounts")))
+        func send(_ request: HTTPRequest) async throws -> HTTPResponse {
+            do {
+                return try await http.send(request)
+            } catch let failure as ProviderFailure {
+                throw failure
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw ProviderFailure(.transient, "Buddy could not be reached.")
+            }
+        }
+        let accounts = try Self.body(await send(request("/console/accounts")))
         guard let rows = accounts["accounts"] as? [[String: Any]] else { throw ProviderFailure(.invalidResponse, "Buddy account response changed.") }
         let selected: [String: Any]?
         if let uid = auth.accountID { selected = rows.first { $0["uid"] as? String == uid && $0["type"] as? String == "personal" } }
@@ -34,7 +45,7 @@ actor BuddyProvider: UsageProvider {
         guard let selected, let uid = selected["uid"] as? String else {
             throw ProviderFailure(.authentication, "Select one personal Buddy account in the chosen login source. Enterprise pools are not yet supported.")
         }
-        let summary = try await http.send(request("/billing/meter/get-user-resource-summary", body: [:]))
+        let summary = try await send(request("/billing/meter/get-user-resource-summary", body: [:]))
         let data = try Self.body(summary)
         guard let packages = data["Packages"] as? [[String: Any]] else { throw ProviderFailure(.invalidResponse, "Buddy credit summary changed.") }
         let codes = Array(Set(packages.compactMap { $0["PackageCode"] as? String })).sorted()
@@ -48,7 +59,7 @@ actor BuddyProvider: UsageProvider {
                     for page in 1...100 {
                         let payload: [String: Any] = ["PageNumber": page, "PageSize": 100, "Status": [0,3], "PackageCodes": codes,
                             "SlicePeriodStartTime": day + " 00:00:00", "SlicePeriodEndTime": day + " 23:59:59", "NeedRenewInfo": true]
-                        let body = try Self.body(await http.send(request("/billing/meter/get-user-resource-" + family + "-packages", body: payload)))
+                        let body = try Self.body(await send(request("/billing/meter/get-user-resource-" + family + "-packages", body: payload)))
                         guard let entries = body["Accounts"] as? [[String: Any]], let count = QuotaDiscovery.number(body["TotalCount"]), count >= 0 else {
                             throw ProviderFailure(.invalidResponse, "Buddy package response changed.")
                         }

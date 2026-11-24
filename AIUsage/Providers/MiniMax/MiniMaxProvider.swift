@@ -942,20 +942,8 @@ actor MiniMaxProvider: UsageProvider {
         let designWallet = walletEntries.first { QuotaDiscovery.number($0["source"]) == 1 }
         let hailuoWallet = walletEntries.first { QuotaDiscovery.number($0["source"]) == 0 }
 
-        var creditParts: [String] = []
-        if !hasActiveTokenPlan, let agentCreditsAmount,
-           (agentCreditsAmount > 0 || agentCreditsFromMembership) {
-            creditParts.append("Agent \(formatCredits(agentCreditsAmount))")
-        }
-        if let gift = QuotaDiscovery.number(membershipRoot?["daily_login_gift_credit_remaining"]),
-           gift > 0 {
-            creditParts.append("Gift \(formatCredits(gift))")
-        }
-        if let designWallet, let designCredits = QuotaDiscovery.number(designWallet["total_credit"]) {
-            creditParts.append("Design \(formatCredits(designCredits))")
-        } else if walletObj != nil, let totalCredit = QuotaDiscovery.number(walletObj?["total_credit"]) {
-            creditParts.append("Design \(formatCredits(totalCredit))")
-        }
+        let designAmount = QuotaDiscovery.number(designWallet?["total_credit"])
+            ?? (walletObj != nil ? QuotaDiscovery.number(walletObj?["total_credit"]) : nil)
 
         let hailuoCreditData = hailuoCredit.flatMap { resp -> [String: Any]? in
             guard resp.statusCode == 200,
@@ -969,16 +957,63 @@ actor MiniMaxProvider: UsageProvider {
                 endpoint: "MiniMax hailuo credit"
             )
         }
-        if let hailuoAmount = QuotaDiscovery.number(hailuoCreditData?["total_credit"])
-            ?? QuotaDiscovery.number(hailuoWallet?["total_credit"]) {
-            creditParts.append("Hailuo \(formatCredits(hailuoAmount))")
+        let hailuoAmount = QuotaDiscovery.number(hailuoCreditData?["total_credit"])
+            ?? QuotaDiscovery.number(hailuoWallet?["total_credit"])
+
+        let hailuoEquityData = hailuoEquity.flatMap { resp -> [String: Any]? in
+            guard resp.statusCode == 200,
+                  let obj = try? ProviderParsing.object(from: resp.body) else { return nil }
+            return ProviderParsing.object(obj["data"]) ?? obj
+        }
+        if let hailuoEquityData {
+            warnings += ResponseSchemaWatch.confirmedJSONKeys(
+                in: hailuoEquityData,
+                provider: .minimax,
+                endpoint: "MiniMax hailuo equity"
+            )
         }
 
-        details.append(ProviderUsageDetail(
-            id: "minimax.credits",
-            title: "Additional Credits",
-            value: creditParts.isEmpty ? "N/A" : creditParts.joined(separator: " · ")
-        ))
+        if let designAmount,
+           !windows.contains(where: { $0.kind.rawValue == "additional:minimax.design" }) {
+            windows.append(mediaWalletWindow(
+                id: "minimax.design",
+                title: "Design",
+                amount: designAmount,
+                planName: ProviderParsing.string(designWallet?["plan_name"]),
+                explicitTotal: nil,
+                resetsAt: ProviderParsing.date(designWallet?["next_credit_refresh_time"])
+            ))
+        }
+        if let hailuoAmount,
+           !windows.contains(where: { $0.kind.rawValue == "additional:minimax.hailuo" }) {
+            windows.append(mediaWalletWindow(
+                id: "minimax.hailuo",
+                title: "Hailuo",
+                amount: hailuoAmount,
+                planName: ProviderParsing.string(hailuoEquityData?["memberName"])
+                    ?? ProviderParsing.string(hailuoWallet?["plan_name"]),
+                explicitTotal: QuotaDiscovery.number(hailuoEquityData?["totalCredits"]),
+                resetsAt: ProviderParsing.date(hailuoWallet?["next_credit_refresh_time"])
+            ))
+        }
+
+        var creditParts: [String] = []
+        if !hasActiveTokenPlan, let agentCreditsAmount,
+           (agentCreditsAmount > 0 || agentCreditsFromMembership) {
+            creditParts.append("Agent \(formatCredits(agentCreditsAmount))")
+        }
+        if let gift = QuotaDiscovery.number(membershipRoot?["daily_login_gift_credit_remaining"]),
+           gift > 0 {
+            creditParts.append("Gift \(formatCredits(gift))")
+        }
+
+        if !creditParts.isEmpty || (designAmount == nil && hailuoAmount == nil) {
+            details.append(ProviderUsageDetail(
+                id: "minimax.credits",
+                title: "Additional Credits",
+                value: creditParts.isEmpty ? "N/A" : creditParts.joined(separator: " · ")
+            ))
+        }
 
         if hasActiveTokenPlan, let agentCreditsAmount {
             if let total = agentCreditsTotal, total > 0, (0...total).contains(agentCreditsAmount) {
@@ -1001,19 +1036,6 @@ actor MiniMaxProvider: UsageProvider {
                     value: "\(formatCredits(agentCreditsAmount)) credits"
                 ))
             }
-        }
-
-        let hailuoEquityData = hailuoEquity.flatMap { resp -> [String: Any]? in
-            guard resp.statusCode == 200,
-                  let obj = try? ProviderParsing.object(from: resp.body) else { return nil }
-            return ProviderParsing.object(obj["data"]) ?? obj
-        }
-        if let hailuoEquityData {
-            warnings += ResponseSchemaWatch.confirmedJSONKeys(
-                in: hailuoEquityData,
-                provider: .minimax,
-                endpoint: "MiniMax hailuo equity"
-            )
         }
 
         let planCandidates: [String?] = [
@@ -1114,6 +1136,47 @@ actor MiniMaxProvider: UsageProvider {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let parsed = Double(trimmed), parsed.isFinite else { return nil }
         return parsed
+    }
+
+    private static func mediaWalletAllotment(planName: String?, explicitTotal: Double?) -> Double? {
+        if let explicitTotal, explicitTotal > 0 {
+            return explicitTotal
+        }
+        let lower = planName?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        guard !lower.isEmpty, !lower.contains("free") else { return nil }
+        if lower.contains("max") { return 12_000 }
+        if lower.contains("pro") { return 4_500 }
+        if lower.contains("standard") || lower.contains("plus") { return 1_000 }
+        return nil
+    }
+
+    private static func mediaWalletWindow(
+        id: String,
+        title: String,
+        amount: Double,
+        planName: String?,
+        explicitTotal: Double?,
+        resetsAt: Date?
+    ) -> QuotaWindow {
+        let clampedAmount = max(amount, 0)
+        if let allotment = mediaWalletAllotment(planName: planName, explicitTotal: explicitTotal) {
+            let limit = max(allotment, clampedAmount)
+            let usedPercent = limit > 0 ? min(max((limit - clampedAmount) / limit * 100, 0), 100) : 0
+            return QuotaWindow(
+                kind: .additional(id: id, title: title),
+                usedPercent: usedPercent,
+                resetsAt: resetsAt,
+                remainingCount: clampedAmount,
+                limitCount: limit
+            )
+        }
+        return QuotaWindow(
+            kind: .additional(id: id, title: title),
+            usedPercent: 0,
+            resetsAt: resetsAt,
+            isInactive: true,
+            inactiveDetail: "\(formatCredits(clampedAmount)) left"
+        )
     }
 
     private static func formatCredits(_ value: Double) -> String {

@@ -93,7 +93,7 @@ final class MiniMaxProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.planName, "Pro")
         XCTAssertEqual(snapshot.accountEmail, "creator@example.com")
         XCTAssertEqual(snapshot.dashboardSubtitle, "Unified account • Agent, Design & Hailuo Video")
-        XCTAssertEqual(snapshot.windows.count, 3)
+        XCTAssertEqual(snapshot.windows.count, 5)
         XCTAssertEqual(snapshot.windows[0].kind, .session)
         XCTAssertEqual(snapshot.windows[0].usedPercent, 25, accuracy: 0.01)
         XCTAssertEqual(snapshot.windows[1].kind, .weekly)
@@ -102,11 +102,18 @@ final class MiniMaxProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.windows[2].usedPercent, 15, accuracy: 0.01)
         XCTAssertEqual(snapshot.windows[2].remainingCount, 17)
         XCTAssertEqual(snapshot.windows[2].limitCount, 20)
+        XCTAssertEqual(snapshot.windows[3].kind, .additional(id: "minimax.design", title: "Design"))
+        XCTAssertEqual(snapshot.windows[3].remainingCount, 420)
+        XCTAssertEqual(snapshot.windows[3].limitCount, 1_000)
+        XCTAssertEqual(snapshot.windows[3].usedPercent, 58, accuracy: 0.01)
+        XCTAssertEqual(snapshot.windows[4].kind, .additional(id: "minimax.hailuo", title: "Hailuo"))
+        XCTAssertEqual(snapshot.windows[4].remainingCount, 350)
+        XCTAssertEqual(snapshot.windows[4].limitCount, 1_000)
+        XCTAssertEqual(snapshot.windows[4].usedPercent, 65, accuracy: 0.01)
 
-        XCTAssertEqual(snapshot.usageDetails.map(\.id), ["minimax.credits", "minimax.agent.credits"])
-        XCTAssertEqual(snapshot.usageDetails.map(\.title), ["Additional Credits", "Token Plan Credits"])
-        XCTAssertEqual(snapshot.usageDetails[0].value, "Design 420 · Hailuo 350")
-        XCTAssertEqual(snapshot.usageDetails[1].value, "1,500 credits")
+        XCTAssertEqual(snapshot.usageDetails.map(\.id), ["minimax.agent.credits"])
+        XCTAssertEqual(snapshot.usageDetails.map(\.title), ["Token Plan Credits"])
+        XCTAssertEqual(snapshot.usageDetails[0].value, "1,500 credits")
 
         let requests = await http.capturedRequests()
         XCTAssertEqual(requests.count, 7)
@@ -133,18 +140,24 @@ final class MiniMaxProviderTests: XCTestCase {
         )
         XCTAssertEqual(snapshot.planName, "Free")
         XCTAssertEqual(snapshot.accountEmail, "free@example.com")
-        XCTAssertEqual(snapshot.windows.count, 2)
-        XCTAssertEqual(snapshot.windows.map(\.kind), [.session, .weekly])
+        XCTAssertEqual(snapshot.windows.count, 4)
+        XCTAssertEqual(snapshot.windows.map(\.kind), [
+            .session,
+            .weekly,
+            .additional(id: "minimax.design", title: "Design"),
+            .additional(id: "minimax.hailuo", title: "Hailuo")
+        ])
         XCTAssertTrue(snapshot.windows.allSatisfy(\.isInactive))
         XCTAssertEqual(snapshot.windows[0].inactiveDetail, "No Token Plan")
         XCTAssertEqual(snapshot.windows[1].inactiveDetail, "No Token Plan")
+        XCTAssertEqual(snapshot.windows[2].inactiveDetail, "0 left")
+        XCTAssertEqual(snapshot.windows[3].inactiveDetail, "0 left")
         XCTAssertNil(snapshot.windows[1].trailingDetail)
         XCTAssertTrue(snapshot.availableMenuBarItems.isEmpty)
-        XCTAssertEqual(snapshot.usageDetails.map(\.id), ["minimax.credits"])
-        XCTAssertEqual(snapshot.usageDetails.map(\.title), ["Additional Credits"])
-        XCTAssertEqual(snapshot.usageDetails.map(\.value), ["Design 0 · Hailuo 0"])
+        XCTAssertTrue(snapshot.usageDetails.isEmpty)
         XCTAssertTrue(snapshot.hasPanelContent)
         XCTAssertTrue(ProviderDetailsLayout.canExpand(snapshot))
+        XCTAssertEqual(ProviderDetailsLayout.rows(ProviderDetailsLayout.detailWindows(snapshot)).count, 1)
         XCTAssertFalse(ProviderDetailsLayout.showsAdditionalUsageRow(snapshot))
 
         let history = UsageHistory()
@@ -165,9 +178,11 @@ final class MiniMaxProviderTests: XCTestCase {
         )
         XCTAssertEqual(withAgentCredits.windows[0].inactiveDetail, "No Token Plan")
         XCTAssertEqual(withAgentCredits.windows[1].inactiveDetail, "No Token Plan")
+        XCTAssertEqual(withAgentCredits.windows[2].inactiveDetail, "340 left")
+        XCTAssertEqual(withAgentCredits.windows[3].inactiveDetail, "50 left")
         XCTAssertNil(withAgentCredits.windows[1].trailingDetail)
         XCTAssertEqual(withAgentCredits.usageDetails.map(\.id), ["minimax.credits"])
-        XCTAssertEqual(withAgentCredits.usageDetails.map(\.value), ["Agent 378.76 · Design 340 · Hailuo 50"])
+        XCTAssertEqual(withAgentCredits.usageDetails.map(\.value), ["Agent 378.76"])
     }
 
     func testDecryptsDesignV2EncWith16ByteIV() throws {
@@ -275,7 +290,8 @@ final class MiniMaxProviderTests: XCTestCase {
         )
         let fallbackSnap = try await providerFallback.fetch()
         XCTAssertEqual(fallbackSnap.planName, "Free")
-        XCTAssertEqual(fallbackSnap.usageDetails.map(\.value), ["Design 75 · Hailuo 10"])
+        XCTAssertEqual(fallbackSnap.windows.first { $0.kind.rawValue == "additional:minimax.design" }?.inactiveDetail, "75 left")
+        XCTAssertEqual(fallbackSnap.windows.first { $0.kind.rawValue == "additional:minimax.hailuo" }?.inactiveDetail, "10 left")
         XCTAssertNil(store.load(for: "MiniMax desktop"))
     }
 
@@ -299,7 +315,8 @@ final class MiniMaxProviderTests: XCTestCase {
         XCTAssertEqual(snap.credentialSource, "Edge Default")
         XCTAssertEqual(snap.accountEmail, "edge@example.com")
         XCTAssertEqual(snap.planName, "Free")
-        XCTAssertEqual(snap.usageDetails.map(\.value), ["Design 120 · Hailuo 40"])
+        XCTAssertEqual(snap.windows.first { $0.kind.rawValue == "additional:minimax.design" }?.inactiveDetail, "120 left")
+        XCTAssertEqual(snap.windows.first { $0.kind.rawValue == "additional:minimax.hailuo" }?.inactiveDetail, "40 left")
     }
 
     func testActiveTokenPlanWithTotalCreditsRendersBoundedTokenPlanProgress() throws {

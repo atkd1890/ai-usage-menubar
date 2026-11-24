@@ -174,6 +174,26 @@ extension BuddyTests {
         XCTAssertEqual(Set(requests.map { $0.url.path }), ["/console/accounts", "/billing/meter/get-user-resource-summary", "/billing/meter/get-user-resource-free-packages", "/billing/meter/get-user-resource-paid-packages"])
     }
 
+    func testUnreachableHostMapsToTransientBuddyError() async {
+        struct UnreachableHTTPClient: HTTPClient {
+            func send(_ request: HTTPRequest) async throws -> HTTPResponse {
+                throw URLError(.cannotConnectToHost)
+            }
+        }
+        let provider = BuddyProvider(http: UnreachableHTTPClient(), method: { .desktop }, credential: { _ in
+            BuddyCredential(headers: ["Authorization": "Bearer fake-current"], host: "www.codebuddy.ai", source: "CodeBuddy desktop", fingerprint: "fake-scope", accountID: "fake-personal")
+        })
+        do {
+            _ = try await provider.fetch()
+            XCTFail("Expected transient ProviderFailure")
+        } catch let failure as ProviderFailure {
+            XCTAssertEqual(failure.kind, .transient)
+            XCTAssertEqual(failure.message, "Buddy could not be reached.")
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
     func testSortsAdditionalCreditPoolsAndPackagesBySoonestExpiryFIFO() throws {
         let addon = "TCACA_code_009_0XmEQc2xOf"
         let laterExpiry = 1_900_000_000_000
