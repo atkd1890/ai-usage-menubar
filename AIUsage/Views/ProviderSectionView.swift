@@ -644,14 +644,22 @@ private struct AdditionalCreditsRow: View {
     let detail: ProviderUsageDetail
     let displayMode: UsageDisplayMode
 
-    private var segments: [(label: String, number: String)] {
+    private enum Segment {
+        case metric(label: String, number: String)
+        case mutedStatus(String)
+    }
+
+    private var segments: [Segment] {
         let raw = detail.value.components(separatedBy: " · ")
-        let parsed: [(label: String, number: String)] = raw.compactMap { segment in
+        let parsed: [Segment] = raw.compactMap { segment in
+            if segment == "Off" || segment == "N/A" {
+                return .mutedStatus(segment)
+            }
             guard let space = segment.range(of: " ", options: .backwards) else { return nil }
             let label = String(segment[..<space.lowerBound])
             let number = String(segment[space.upperBound...])
             guard label.first?.isLetter == true, !label.contains("/"), number.first?.isNumber == true else { return nil }
-            return (label: label, number: number)
+            return .metric(label: label, number: number)
         }
         return parsed.count == raw.count ? parsed : []
     }
@@ -684,12 +692,18 @@ private struct AdditionalCreditsRow: View {
                                     Text("·")
                                         .foregroundStyle(.tertiary)
                                 }
-                                HStack(spacing: 4) {
-                                    Text(segment.label)
+                                switch segment {
+                                case let .metric(label, number):
+                                    HStack(spacing: 4) {
+                                        Text(label)
+                                            .foregroundStyle(.secondary)
+                                        Text(number)
+                                            .monospacedDigit()
+                                            .fontWeight(.medium)
+                                    }
+                                case let .mutedStatus(text):
+                                    Text(text)
                                         .foregroundStyle(.secondary)
-                                    Text(segment.number)
-                                        .monospacedDigit()
-                                        .fontWeight(.medium)
                                 }
                             }
                         }

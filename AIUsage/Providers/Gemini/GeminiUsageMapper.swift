@@ -60,8 +60,8 @@ enum GeminiUsageMapper {
                 limitCount: limitCount
             )
         }
-        var details: [ProviderUsageDetail] = []
-        var sawOveragePoolCredits = false
+        var overageDetails: [ProviderUsageDetail] = []
+        var notices: [ProviderUsageDetail] = []
         for pool in pools {
             warnings += ResponseSchemaWatch.confirmedJSONKeys(
                 in: pool,
@@ -86,18 +86,28 @@ enum GeminiUsageMapper {
             }
             if type == "OVERAGE_CREDITS" {
                 let creditsObj = (pool["credits"] as? [String: Any]) ?? (pool["overageCredits"] as? [String: Any])
-                if let amount = QuotaDiscovery.number(
-                    creditsObj?["creditsRemaining"]
-                        ?? pool["creditsRemaining"]
-                        ?? creditsObj?["remaining"]
-                        ?? pool["remaining"]
-                ) {
-                    details.append(ProviderUsageDetail(
-                        id: "gemini.overage.credits",
-                        title: "Additional Credits",
-                        value: "AI Credits \(QuotaWindow.formatCount(amount))"
-                    ))
-                    sawOveragePoolCredits = true
+                if let creditsObj {
+                    warnings += ResponseSchemaWatch.confirmedJSONKeys(
+                        in: creditsObj,
+                        provider: .gemini,
+                        endpoint: "Gemini Web credits"
+                    )
+                }
+                if overageDetails.isEmpty {
+                    let amount = QuotaDiscovery.number(
+                        creditsObj?["creditsRemaining"]
+                            ?? pool["creditsRemaining"]
+                            ?? creditsObj?["remaining"]
+                            ?? pool["remaining"]
+                    )
+                    let useOverage = (creditsObj?["useOverageAiCredits"] as? Bool)
+                        ?? (usage["useOverageAiCredits"] as? Bool)
+                    let expiresAt = ProviderParsing.date(creditsObj?["expiresAt"] ?? pool["expiresAt"])
+                    overageDetails = Self.overageCreditDetails(
+                        creditsRemaining: amount,
+                        useOverage: useOverage,
+                        expiresAt: expiresAt
+                    )
                 }
                 continue
             }
@@ -108,16 +118,16 @@ enum GeminiUsageMapper {
             if let window = QuotaDiscovery.window(id: "gemini.pool." + type, title: QuotaDiscovery.name(type),
                 used: ratio.map { $0 * 100 }, reset: ProviderParsing.date(gxu?["windowRefreshesAt"])) {
                 if !windows.contains(where: { $0.kind == window.kind }) { windows.append(window) }
-            } else { details.append(QuotaDiscovery.notice(type)) }
+            } else { notices.append(QuotaDiscovery.notice(type)) }
         }
-        if !sawOveragePoolCredits, usage["useOverageAiCredits"] as? Bool == false {
-            details.append(ProviderUsageDetail(
-                id: "gemini.overage.credits",
-                title: "Additional Credits",
-                value: "Off"
-            ))
+        if overageDetails.isEmpty, usage["useOverageAiCredits"] as? Bool == false {
+            overageDetails = Self.overageCreditDetails(
+                creditsRemaining: nil,
+                useOverage: false,
+                expiresAt: nil
+            )
         }
-        guard !windows.isEmpty else {
+        guard !windows.isEmpty || !overageDetails.isEmpty else {
             throw ProviderFailure(.invalidResponse, "This Google account reports no Gemini web usage windows.")
         }
         // Only this tier's meaning is verified; do not invent a plan for unknown enums.
@@ -128,10 +138,42 @@ enum GeminiUsageMapper {
             windows: windows,
             fetchedAt: now,
             credentialSource: sourceLabel,
-            usageDetails: details,
+            usageDetails: overageDetails + notices,
             diagnosticWarnings: ResponseSchemaWatch.deduplicated(warnings)
         )
     }
+
+    static func overageCreditDetails(
+        creditsRemaining: Double?,
+        useOverage: Bool?,
+        expiresAt: Date?
+    ) -> [ProviderUsageDetail] {
+        var details: [ProviderUsageDetail] = []
+        if let amount = creditsRemaining, amount.isFinite, amount >= 0 {
+            let suffix = useOverage == false ? " · Off" : ""
+            details.append(ProviderUsageDetail(
+                id: "gemini.overage.credits",
+                title: "Additional Credits",
+                value: "AI Credits \(QuotaWindow.formatCount(amount))\(suffix)"
+            ))
+        } else if let useOverage {
+            details.append(ProviderUsageDetail(
+                id: "gemini.overage.credits",
+                title: "Additional Credits",
+                value: useOverage ? "On" : "Off"
+            ))
+        }
+        if let expiresAt {
+            details.append(ProviderUsageDetail(
+                id: "gemini.overage.credits.expiry",
+                title: "AI Credits expire",
+                value: expiresAt.formatted(date: .abbreviated, time: .shortened),
+                targetDate: expiresAt
+            ))
+        }
+        return details
+    }
+
     static var changedResponse: ProviderFailure {
         ProviderFailure(.invalidResponse, "Gemini web usage response changed. Update AI Usage.")
     }

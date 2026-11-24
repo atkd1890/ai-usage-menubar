@@ -635,6 +635,13 @@ enum ConfirmedSchemaCatalog {
             jsonKeys: ["windowRefreshesAt", "remaining", "limit", "total", "title"],
             requiredJSONKeys: ["windowRefreshesAt"]
         ),
+        // Displayed: creditsRemaining, remaining, useOverageAiCredits, expiresAt. Confirmed-ignored: title, description, learnMoreUrl.
+        "Gemini Web credits": EndpointConfirmedSchema(
+            jsonKeys: [
+                "creditsRemaining", "remaining", "useOverageAiCredits",
+                "expiresAt", "title", "description", "learnMoreUrl"
+            ]
+        ),
         // Native GetUsageInfo protobuf top-level tags:
         // Displayed: #2 (user_tier), #3 (pools). Confirmed-ignored: #1 (id/header), #4 (disclaimer), #5 (advanced_settings).
         "Gemini Native": EndpointConfirmedSchema(
@@ -642,18 +649,22 @@ enum ConfirmedSchemaCatalog {
             requiredProtobufTags: [2, 3],
             enums: ["user_tier": ["0", "1", "2"]]
         ),
-        // Native Pool protobuf tags (#1 type, #2 gxu, #3 overage):
-        // Intentionally leaves pool_type "3" unconfirmed so OVERAGE_CREDITS emits an alert until wired or confirmed.
+        // Native Pool protobuf tags (#1 type, #2 gxu, #3 credits):
         "Gemini Native pool": EndpointConfirmedSchema(
             protobufTags: [1, 2, 3],
             requiredProtobufTags: [1],
-            enums: ["pool_type": ["1", "2"]]
+            enums: ["pool_type": ["1", "2", "3"]]
         ),
         // Native GxuPool protobuf tags (#1 reset_time, #2 percentage_used, #5 remaining, #6 limit):
         // Confirmed-ignored: #3 (title), #4 (subtitle/tip).
         "Gemini Native GxuPool": EndpointConfirmedSchema(
             protobufTags: [1, 2, 3, 4, 5, 6],
             requiredProtobufTags: [1, 2]
+        ),
+        // Native OverageCreditPool protobuf tags (#1 expires_at, #2 credits_remaining, #3 use_overage_ai_credits):
+        // Confirmed-ignored: #4 (title), #5 (description), #6 (learn_more_url).
+        "Gemini Native OverageCreditPool": EndpointConfirmedSchema(
+            protobufTags: [1, 2, 3, 4, 5, 6]
         )
     ])
 

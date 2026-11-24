@@ -151,6 +151,31 @@ final class GeminiTests: XCTestCase {
         XCTAssertTrue(next.geminiChromeCookiesAllowed)
     }
 
+    func testWebOverageCreditsMapsZeroOffAndExpiry() throws {
+        let expiryISO = "2027-02-15T12:00:00Z"
+        let expiry = try XCTUnwrap(ISO8601DateFormatter().date(from: expiryISO))
+        let json = #"""
+        [{"data":{"viewer":{"rpcs":{"getUsageInfo":{
+          "subscriptionTier":"TIER1",
+          "pools":[
+            {"poolType":"GXU_FIVE_HOURLY","percentageUsed":0.25,"gxu":{"windowRefreshesAt":"2027-01-15T12:00:00Z"}},
+            {"poolType":"OVERAGE_CREDITS","credits":{"creditsRemaining":0,"useOverageAiCredits":false,"expiresAt":"2027-02-15T12:00:00Z"}}
+          ]
+        }}}}}]
+        """#
+        let snapshot = try GeminiUsageMapper.map(response: httpResponse(json: json), now: now)
+        XCTAssertTrue(snapshot.allDiagnosticWarnings.isEmpty)
+        XCTAssertEqual(snapshot.usageDetails, [
+            ProviderUsageDetail(id: "gemini.overage.credits", title: "Additional Credits", value: "AI Credits 0 · Off"),
+            ProviderUsageDetail(
+                id: "gemini.overage.credits.expiry",
+                title: "AI Credits expire",
+                value: expiry.formatted(date: .abbreviated, time: .shortened),
+                targetDate: expiry
+            )
+        ])
+    }
+
     private func rows(encrypted: String) -> String {
         #"[{"name":"__Secure-1PSID","host":".google.com","value":"","encrypted":""# + encrypted + #""}]"#
     }

@@ -160,7 +160,7 @@ Current summary/detail conventions live in `ProviderDetailsLayout`: Claude, Code
 - Login methods (default first): Gemini desktop; Edge; Chrome.
 - Credential source: Gemini.app active account (`com.google.GeminiMacOS`, Keychain `Gemini Safe Storage`); browser `__Secure-1PSID(TS)`.
 - Read-only endpoints: `robinfrontend-pa.googleapis.com/.../GetUsageInfo` (protobuf); web `gemini.google.com` GraphQL.
-- Data families: Native/web session and weekly pools; discovered pool types; additional credits when supplied by the selected adapter.
+- Data families: Native/web session and weekly pools; discovered pool types; `OVERAGE_CREDITS` additional AI credits (`credits_remaining` including zero, `use_overage_ai_credits` Off/On state, and optional `expires_at` countdown detail; native `credits_remaining=0` with `use_overage_ai_credits=false` is live-verified, while positive balances, `expires_at`, and Web `OVERAGE_CREDITS` shapes use fixtures).
 
 ### Muse
 

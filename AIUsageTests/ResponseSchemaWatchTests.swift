@@ -72,13 +72,18 @@ final class ResponseSchemaWatchTests: XCTestCase {
     }
 
     func testGeminiNativeParsesGxuRemainingLimitAndDetectsOverageAndUnknownTags() throws {
-        // Live-shaped clean payload with tier=2, pool 1 (2400/2400), pool 2 (44410/48384), fields #4 & #5
+        // Live-shaped clean payload with tier=2, pool 1 (2400/2400), pool 2 (44410/48384), pool 3 (OVERAGE_CREDITS), fields #4 & #5
         let ts = pbMsg(1, pbVarint(1, 1_800_100_000) + pbVarint(2, 500_000_000))
         let gxu1 = ts + pbFloat(2, 0.0) + pbStr(3, "Current usage") + pbMsg(4, pbStr(1, "Tip")) + pbVarint(5, 2400) + pbVarint(6, 2400)
         let gxu2 = ts + pbFloat(2, 0.08212207) + pbStr(3, "Weekly limit") + pbVarint(5, 44410) + pbVarint(6, 48384)
+        let overage = pbVarint(2, 0) + pbVarint(3, 0)
+            + pbStr(4, "Use AI credits")
+            + pbStr(5, "Continue using Gemini with AI credits when you reach your plan’s limits.")
+            + pbStr(6, "https://support.google.com/googleone/answer/16287445")
         let cleanBody = pbVarint(2, 2)
             + pbMsg(3, pbVarint(1, 1) + pbMsg(2, gxu1))
             + pbMsg(3, pbVarint(1, 2) + pbMsg(2, gxu2))
+            + pbMsg(3, pbVarint(1, 3) + pbMsg(3, overage))
             + pbMsg(4, pbStr(1, "Disclaimer"))
             + pbMsg(5, pbStr(1, "Advanced"))
 
@@ -93,10 +98,18 @@ final class ResponseSchemaWatchTests: XCTestCase {
         XCTAssertEqual(clean.windows[0].limitCount, 2400)
         XCTAssertEqual(clean.windows[1].remainingCount, 44410)
         XCTAssertEqual(clean.windows[1].limitCount, 48384)
+        XCTAssertEqual(clean.usageDetails, [
+            ProviderUsageDetail(id: "gemini.overage.credits", title: "Additional Credits", value: "AI Credits 0 · Off")
+        ])
 
-        // Unknown top-level tag #7 + OVERAGE_CREDITS pool (type=3)
-        let driftedBody = cleanBody
-            + pbMsg(3, pbVarint(1, 3) + pbMsg(3, pbVarint(1, 150)))
+        // Unknown top-level tag #7, unknown pool_type 4, and unknown tag #7 inside OverageCreditPool
+        let driftedBody = pbVarint(2, 2)
+            + pbMsg(3, pbVarint(1, 1) + pbMsg(2, gxu1))
+            + pbMsg(3, pbVarint(1, 2) + pbMsg(2, gxu2))
+            + pbMsg(3, pbVarint(1, 3) + pbMsg(3, overage + pbVarint(7, 42)))
+            + pbMsg(3, pbVarint(1, 4))
+            + pbMsg(4, pbStr(1, "Disclaimer"))
+            + pbMsg(5, pbStr(1, "Advanced"))
             + pbVarint(7, 99)
         let drifted = try GeminiNativeUsageMapper.map(
             response: HTTPResponse(statusCode: 200, headers: [:], body: driftedBody),
@@ -104,9 +117,15 @@ final class ResponseSchemaWatchTests: XCTestCase {
             accountLabel: nil
         )
         XCTAssertTrue(drifted.quotaCompatibilityNotes.isEmpty)
-        XCTAssertTrue(drifted.allDiagnosticWarnings.contains { $0.id == "schema.added.gemini.overage_credits" })
+        XCTAssertFalse(drifted.allDiagnosticWarnings.contains { $0.id == "schema.added.gemini.overage_credits" })
         XCTAssertTrue(drifted.allDiagnosticWarnings.contains {
-            $0.kind == .schemaAdded && $0.detail.contains("#7: 99")
+            $0.kind == .schemaAdded && $0.summary.contains("Gemini Native OverageCreditPool") && $0.detail.contains("#7: 42")
+        })
+        XCTAssertTrue(drifted.allDiagnosticWarnings.contains {
+            $0.kind == .schemaAdded && $0.summary.contains("Gemini Native pool") && $0.detail.contains("4")
+        })
+        XCTAssertTrue(drifted.allDiagnosticWarnings.contains {
+            $0.kind == .schemaAdded && $0.summary.contains("Gemini Native") && $0.detail.contains("#7: 99")
         })
     }
 
@@ -138,7 +157,7 @@ final class ResponseSchemaWatchTests: XCTestCase {
           "brandNewTopKey":123,
           "pools":[
             {"poolType":"GXU_WEEKLY","percentageUsed":0.1,"gxu":{"windowRefreshesAt":"2026-11-23T01:03:43Z","remaining":900,"limit":1000}},
-            {"poolType":"OVERAGE_CREDITS","credits":{"creditsRemaining":250}}
+            {"poolType":"OVERAGE_CREDITS","credits":{"creditsRemaining":250,"brandNewCreditKey":true}}
           ],
           "useOverageAiCredits":true
         }}}}}]
@@ -154,6 +173,9 @@ final class ResponseSchemaWatchTests: XCTestCase {
         ])
         XCTAssertTrue(drifted.allDiagnosticWarnings.contains { $0.detail.contains("brandNewTopKey: 123") })
         XCTAssertTrue(drifted.allDiagnosticWarnings.contains { $0.detail.contains("TIER_FUTURE") })
+        XCTAssertTrue(drifted.allDiagnosticWarnings.contains {
+            $0.summary.contains("Gemini Web credits") && $0.detail.contains("brandNewCreditKey: true")
+        })
     }
 
     func testAntigravityClientUACreditsParsingAndSchemaDrift() throws {

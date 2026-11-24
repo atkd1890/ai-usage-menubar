@@ -192,6 +192,127 @@ final class GeminiNativeTests: XCTestCase {
         XCTAssertEqual(count, 2)
     }
 
+    @MainActor
+    func testOverageCreditPoolMapsLiveZeroOffShapeWithoutWarnings() throws {
+        let gxu = pbMsg(1, pbVarint(1, 1_800_100_000)) + pbFloat(2, 0.25)
+        let overage = pbVarint(2, 0) + pbVarint(3, 0)
+            + pbStr(4, "Use AI credits")
+            + pbStr(5, "Continue using Gemini with AI credits when you reach your plan’s limits.")
+            + pbStr(6, "https://support.google.com/googleone/answer/16287445")
+        let body = pbVarint(2, 2)
+            + pbMsg(3, pbVarint(1, 1) + pbMsg(2, gxu))
+            + pbMsg(3, pbVarint(1, 3) + pbMsg(3, overage))
+            + pbMsg(4, pbStr(1, "Disclaimer"))
+            + pbMsg(5, pbStr(1, "Advanced"))
+
+        let snapshot = try GeminiNativeUsageMapper.map(
+            response: HTTPResponse(statusCode: 200, headers: [:], body: body),
+            now: now,
+            accountLabel: "demo@example.invalid"
+        )
+        XCTAssertTrue(snapshot.allDiagnosticWarnings.isEmpty)
+        XCTAssertEqual(snapshot.usageDetails, [
+            ProviderUsageDetail(id: "gemini.overage.credits", title: "Additional Credits", value: "AI Credits 0 · Off")
+        ])
+        XCTAssertTrue(ProviderDetailsLayout.canExpand(snapshot))
+    }
+
+    func testOverageCreditPoolMapsPositiveCreditsExpiryAndToggleStates() throws {
+        let gxu = pbMsg(1, pbVarint(1, 1_800_100_000)) + pbFloat(2, 0.1)
+        let expirySeconds: UInt64 = 1_800_500_000
+        let expiryDate = Date(timeIntervalSince1970: Double(expirySeconds))
+        let enabledOverage = pbMsg(1, pbVarint(1, expirySeconds))
+            + pbVarint(2, 1250)
+            + pbVarint(3, 1)
+        let enabledBody = pbVarint(2, 2)
+            + pbMsg(3, pbVarint(1, 1) + pbMsg(2, gxu))
+            + pbMsg(3, pbVarint(1, 3) + pbMsg(3, enabledOverage))
+
+        let enabled = try GeminiNativeUsageMapper.map(
+            response: HTTPResponse(statusCode: 200, headers: [:], body: enabledBody),
+            now: now,
+            accountLabel: nil
+        )
+        XCTAssertEqual(enabled.usageDetails, [
+            ProviderUsageDetail(id: "gemini.overage.credits", title: "Additional Credits", value: "AI Credits 1,250"),
+            ProviderUsageDetail(
+                id: "gemini.overage.credits.expiry",
+                title: "AI Credits expire",
+                value: expiryDate.formatted(date: .abbreviated, time: .shortened),
+                targetDate: expiryDate
+            )
+        ])
+
+        let disabledPositiveBody = pbVarint(2, 2)
+            + pbMsg(3, pbVarint(1, 1) + pbMsg(2, gxu))
+            + pbMsg(3, pbVarint(1, 3) + pbMsg(3, pbVarint(2, 250) + pbVarint(3, 0)))
+        let disabledPositive = try GeminiNativeUsageMapper.map(
+            response: HTTPResponse(statusCode: 200, headers: [:], body: disabledPositiveBody),
+            now: now,
+            accountLabel: nil
+        )
+        XCTAssertEqual(disabledPositive.usageDetails, [
+            ProviderUsageDetail(id: "gemini.overage.credits", title: "Additional Credits", value: "AI Credits 250 · Off")
+        ])
+    }
+
+    func testOverageCreditPoolHandlesMissingNegativeDuplicateAndDetailsOnly() throws {
+        let gxu = pbMsg(1, pbVarint(1, 1_800_100_000)) + pbFloat(2, 0.1)
+
+        // Missing credits_remaining with use_overage_ai_credits=false -> Off
+        let missingAmountBody = pbVarint(2, 2)
+            + pbMsg(3, pbVarint(1, 1) + pbMsg(2, gxu))
+            + pbMsg(3, pbVarint(1, 3) + pbMsg(3, pbVarint(3, 0)))
+        let missingAmount = try GeminiNativeUsageMapper.map(
+            response: HTTPResponse(statusCode: 200, headers: [:], body: missingAmountBody),
+            now: now,
+            accountLabel: nil
+        )
+        XCTAssertEqual(missingAmount.usageDetails, [
+            ProviderUsageDetail(id: "gemini.overage.credits", title: "Additional Credits", value: "Off")
+        ])
+
+        // Negative int64 credits_remaining (-5) must not become huge unsigned count
+        let negativeAmountBody = pbVarint(2, 2)
+            + pbMsg(3, pbVarint(1, 1) + pbMsg(2, gxu))
+            + pbMsg(3, pbVarint(1, 3) + pbMsg(3, pbVarint(2, UInt64(bitPattern: -5)) + pbVarint(3, 0)))
+        let negativeAmount = try GeminiNativeUsageMapper.map(
+            response: HTTPResponse(statusCode: 200, headers: [:], body: negativeAmountBody),
+            now: now,
+            accountLabel: nil
+        )
+        XCTAssertEqual(negativeAmount.usageDetails, [
+            ProviderUsageDetail(id: "gemini.overage.credits", title: "Additional Credits", value: "Off")
+        ])
+
+        // Details-only response (OVERAGE_CREDITS only, no GxuPool) is valid
+        let detailsOnlyBody = pbVarint(2, 2)
+            + pbMsg(3, pbVarint(1, 3) + pbMsg(3, pbVarint(2, 400) + pbVarint(3, 1)))
+        let detailsOnly = try GeminiNativeUsageMapper.map(
+            response: HTTPResponse(statusCode: 200, headers: [:], body: detailsOnlyBody),
+            now: now,
+            accountLabel: nil
+        )
+        XCTAssertTrue(detailsOnly.windows.isEmpty)
+        XCTAssertEqual(detailsOnly.usageDetails, [
+            ProviderUsageDetail(id: "gemini.overage.credits", title: "Additional Credits", value: "AI Credits 400")
+        ])
+
+        // Duplicate OVERAGE_CREDITS pools must not duplicate detail IDs
+        let duplicateBody = pbVarint(2, 2)
+            + pbMsg(3, pbVarint(1, 1) + pbMsg(2, gxu))
+            + pbMsg(3, pbVarint(1, 3) + pbMsg(3, pbVarint(2, 300) + pbVarint(3, 1)))
+            + pbMsg(3, pbVarint(1, 3) + pbMsg(3, pbVarint(2, 999) + pbVarint(3, 1)))
+        let duplicate = try GeminiNativeUsageMapper.map(
+            response: HTTPResponse(statusCode: 200, headers: [:], body: duplicateBody),
+            now: now,
+            accountLabel: nil
+        )
+        XCTAssertEqual(duplicate.usageDetails, [
+            ProviderUsageDetail(id: "gemini.overage.credits", title: "Additional Credits", value: "AI Credits 300")
+        ])
+    }
+
     private var fakeClientSecret: String { "GOCSPX-" + String(repeating: "a", count: 28) }
     private func fakeBinary() -> Data {
         Data(clientID.utf8) + Data([0]) + Data(fakeClientSecret.utf8.map { $0 ^ 0x5a })
@@ -212,6 +333,35 @@ final class GeminiNativeTests: XCTestCase {
         HTTPResponse(statusCode: 200, headers: [:], body: try Self.data(usageHex))
     }
     private static func data(_ text: String) throws -> Data { try GeminiProtobuf.hexData(text) }
+
+    private func pbTag(_ number: Int, wireType: Int) -> Data {
+        pbRawVarint(UInt64((number << 3) | wireType))
+    }
+    private func pbVarint(_ number: Int, _ value: UInt64) -> Data {
+        pbTag(number, wireType: 0) + pbRawVarint(value)
+    }
+    private func pbFloat(_ number: Int, _ value: Float) -> Data {
+        var le = value.bitPattern.littleEndian
+        return pbTag(number, wireType: 5) + Data(bytes: &le, count: 4)
+    }
+    private func pbMsg(_ number: Int, _ payload: Data) -> Data {
+        pbTag(number, wireType: 2) + pbRawVarint(UInt64(payload.count)) + payload
+    }
+    private func pbStr(_ number: Int, _ text: String) -> Data {
+        pbMsg(number, Data(text.utf8))
+    }
+    private func pbRawVarint(_ value: UInt64) -> Data {
+        var v = value
+        var out = Data()
+        while true {
+            var byte = UInt8(v & 0x7f)
+            v >>= 7
+            if v != 0 { byte |= 0x80 }
+            out.append(byte)
+            if v == 0 { break }
+        }
+        return out
+    }
 }
 
 private final class NativeMemoryFiles: @unchecked Sendable {
