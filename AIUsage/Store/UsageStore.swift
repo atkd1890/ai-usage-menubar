@@ -86,7 +86,7 @@ final class UsageStore {
                 ConsumerQuotaProvider(id: .manus), ConsumerQuotaProvider(id: .kimi), MuseProvider(), QwenProvider(), AdobeProvider(),
                 MiniMaxProvider(), QoderProvider(), DolaProvider(), ZAIProvider(), BuddyProvider(),
                 AntigravityDesktopProvider(), CopilotProvider(method: { .selected(for: .copilot) }, identity: AccountIdentityClient()),
-                GeminiProvider(native: GeminiNativeProvider(session: google), identity: AccountIdentityClient())]
+                GeminiProvider(native: GeminiNativeProvider(session: google), identity: AccountIdentityClient(), mediaCredits: GoogleFlowCredits())]
     }
 
     func start() {

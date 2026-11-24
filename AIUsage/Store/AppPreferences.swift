@@ -75,6 +75,8 @@ final class AppPreferences {
             case .nativeApp: geminiNativeAccessAllowed
             case .edge: geminiEdgeCookiesAllowed
             case .chrome: geminiChromeCookiesAllowed
+            case .nativeAppEdge: geminiNativeAccessAllowed && geminiEdgeCookiesAllowed
+            case .nativeAppChrome: geminiNativeAccessAllowed && geminiChromeCookiesAllowed
             }
         }
         set {
@@ -82,6 +84,8 @@ final class AppPreferences {
             case .nativeApp: geminiNativeAccessAllowed = newValue
             case .edge: geminiEdgeCookiesAllowed = newValue
             case .chrome: geminiChromeCookiesAllowed = newValue
+            case .nativeAppEdge: geminiNativeAccessAllowed = newValue; geminiEdgeCookiesAllowed = newValue
+            case .nativeAppChrome: geminiNativeAccessAllowed = newValue; geminiChromeCookiesAllowed = newValue
             }
         }
     }
@@ -118,7 +122,7 @@ final class AppPreferences {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         alerts = AlertPreferences(defaults: defaults)
-        geminiSource = defaults.string(forKey: GeminiCredentialSource.preferenceKey).flatMap(GeminiCredentialSource.init(rawValue:)) ?? .nativeApp
+        geminiSource = GeminiCredentialSource.resolved(in: defaults)
         geminiNativeAccessAllowed = defaults.bool(forKey: GeminiNativeAuthStore.accessKey)
         geminiEdgeCookiesAllowed = defaults.bool(forKey: GeminiCredentialSource.edge.accessKey)
         geminiChromeCookiesAllowed = defaults.bool(forKey: GeminiAuthStore.cookieAccessKey)
@@ -652,7 +656,7 @@ final class AppPreferences {
 
 // Expose only credential paths actually implemented by each adapter.
 enum ProviderLoginMethod: String, CaseIterable, Identifiable, Sendable {
-    case desktop, cli, edge, chrome, editorFallback, editor
+    case desktop, cli, edge, chrome, editorFallback, editor, desktopEdge, desktopChrome
     var id: Self { self }
     var title: String {
         switch self {
@@ -662,11 +666,13 @@ enum ProviderLoginMethod: String, CaseIterable, Identifiable, Sendable {
         case .chrome: "Browser (Chrome)"
         case .editorFallback: "Editor + CLI fallback"
         case .editor: "Editor login"
+        case .desktopEdge: "Desktop app + Edge"
+        case .desktopChrome: "Desktop app + Chrome"
         }
     }
     static func supported(for provider: ProviderID) -> [Self] {
         switch provider {
-        case .gemini: [.desktop, .edge, .chrome]
+        case .gemini: [.desktopEdge, .desktopChrome, .desktop, .edge, .chrome]
         case .antigravity: [.desktop]
         case .manus: [.desktop, .edge, .chrome]
         case .muse: [.edge, .chrome]
@@ -687,7 +693,7 @@ enum ProviderLoginMethod: String, CaseIterable, Identifiable, Sendable {
 extension AppPreferences {
     func loginMethod(for provider: ProviderID) -> ProviderLoginMethod {
         if provider == .gemini {
-            switch geminiSource { case .nativeApp: return .desktop; case .edge: return .edge; case .chrome: return .chrome }
+            return geminiSource.loginMethod
         }
         if let stored = defaults.string(forKey: ProviderLoginMethod.key(for: provider)),
            let value = ProviderLoginMethod(rawValue: stored),
@@ -703,7 +709,12 @@ extension AppPreferences {
             switch method {
             case .edge: geminiSource = .edge; geminiEdgeCookiesAllowed = true
             case .chrome: geminiSource = .chrome; geminiChromeCookiesAllowed = true
-            default: geminiSource = .nativeApp; geminiNativeAccessAllowed = true
+            case .desktopEdge:
+                geminiSource = .nativeAppEdge; geminiNativeAccessAllowed = true; geminiEdgeCookiesAllowed = true
+            case .desktopChrome:
+                geminiSource = .nativeAppChrome; geminiNativeAccessAllowed = true; geminiChromeCookiesAllowed = true
+            case .desktop: geminiSource = .nativeApp; geminiNativeAccessAllowed = true
+            default: break
             }
         } else {
             defaults.set(method.rawValue, forKey: ProviderLoginMethod.key(for: provider))
@@ -718,7 +729,7 @@ extension ProviderLoginMethod {
     static func key(for provider: ProviderID) -> String { "\(provider.rawValue)LoginMethod.v1" }
     static func selected(for provider: ProviderID) -> Self {
         if provider == .gemini {
-            switch GeminiCredentialSource.selected { case .nativeApp: return .desktop; case .edge: return .edge; case .chrome: return .chrome }
+            return GeminiCredentialSource.selected.loginMethod
         }
         let supported = supported(for: provider)
         guard let raw = UserDefaults.standard.string(forKey: key(for: provider)),
@@ -741,5 +752,17 @@ extension ProviderLoginMethod {
         if self == .cli, provider == .codex { return "Desktop app / Local OAuth" }
         if self == .cli, provider == .claude { return "Local OAuth" }
         return title
+    }
+}
+
+extension GeminiCredentialSource {
+    var loginMethod: ProviderLoginMethod {
+        switch self {
+        case .nativeApp: .desktop
+        case .edge: .edge
+        case .chrome: .chrome
+        case .nativeAppEdge: .desktopEdge
+        case .nativeAppChrome: .desktopChrome
+        }
     }
 }

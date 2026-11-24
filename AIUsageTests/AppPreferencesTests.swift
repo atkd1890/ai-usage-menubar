@@ -27,7 +27,7 @@ final class AppPreferencesTests: XCTestCase {
         XCTAssertEqual(ProviderLoginMethod.supported(for: .cursor), [.desktop, .edge, .chrome])
         XCTAssertEqual(ProviderLoginMethod.supported(for: .claude), [.cli, .desktop, .edge, .chrome])
         XCTAssertEqual(ProviderLoginMethod.supported(for: .codex), [.cli, .edge, .chrome])
-        XCTAssertEqual(ProviderLoginMethod.supported(for: .gemini), [.desktop, .edge, .chrome])
+        XCTAssertEqual(ProviderLoginMethod.supported(for: .gemini), [.desktopEdge, .desktopChrome, .desktop, .edge, .chrome])
         XCTAssertEqual(ProviderLoginMethod.supported(for: .manus), [.desktop, .edge, .chrome])
         XCTAssertEqual(ProviderLoginMethod.supported(for: .muse), [.edge, .chrome])
         XCTAssertEqual(ProviderLoginMethod.supported(for: .kimi), [.desktop, .edge, .chrome])

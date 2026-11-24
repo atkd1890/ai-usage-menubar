@@ -646,20 +646,25 @@ private struct AdditionalCreditsRow: View {
 
     private enum Segment {
         case metric(label: String, number: String)
+        case labeledMuted(label: String, status: String)
         case mutedStatus(String)
     }
 
     private var segments: [Segment] {
         let raw = detail.value.components(separatedBy: " · ")
         let parsed: [Segment] = raw.compactMap { segment in
-            if segment == "Off" || segment == "N/A" {
+            if segment == "Off" || segment == "N/A" || segment == "Expired" {
                 return .mutedStatus(segment)
             }
             guard let space = segment.range(of: " ", options: .backwards) else { return nil }
             let label = String(segment[..<space.lowerBound])
-            let number = String(segment[space.upperBound...])
-            guard label.first?.isLetter == true, !label.contains("/"), number.first?.isNumber == true else { return nil }
-            return .metric(label: label, number: number)
+            let trailing = String(segment[space.upperBound...])
+            guard label.first?.isLetter == true, !label.contains("/") else { return nil }
+            if ["Off", "N/A", "Expired"].contains(trailing) {
+                return .labeledMuted(label: label, status: trailing)
+            }
+            guard trailing.first?.isNumber == true else { return nil }
+            return .metric(label: label, number: trailing)
         }
         return parsed.count == raw.count ? parsed : []
     }
@@ -680,7 +685,7 @@ private struct AdditionalCreditsRow: View {
 
                 if detail.boundedProgress == nil {
                     if segments.isEmpty {
-                        let isMuted = detail.value == "N/A" || detail.value == "Off"
+                        let isMuted = ["N/A", "Off", "Expired"].contains(detail.value)
                         Text(detail.value)
                             .monospacedDigit()
                             .fontWeight(isMuted ? .regular : .medium)
@@ -701,12 +706,20 @@ private struct AdditionalCreditsRow: View {
                                             .monospacedDigit()
                                             .fontWeight(.medium)
                                     }
+                                case let .labeledMuted(label, status):
+                                    HStack(spacing: 4) {
+                                        Text(label)
+                                            .foregroundStyle(.secondary)
+                                        Text(status)
+                                            .foregroundStyle(.secondary)
+                                    }
                                 case let .mutedStatus(text):
                                     Text(text)
                                         .foregroundStyle(.secondary)
                                 }
                             }
                         }
+                        .minimumScaleFactor(0.85)
                     }
                 }
             }
@@ -1334,7 +1347,7 @@ enum ProviderDetailsLayout {
 
     static func isDetailOnlyWindow(_ window: QuotaWindow, for provider: ProviderID) -> Bool {
         switch provider {
-        case .claude, .codex, .antigravity, .minimax:
+        case .claude, .codex, .antigravity, .minimax, .gemini:
             ![QuotaKind.session, .weekly].contains(window.kind)
         case .qwen:
             ![QuotaKind.daily, .weekly].contains(window.kind)

@@ -2,7 +2,7 @@
 
 A native macOS menu bar app for AI subscription quotas, credit balances, reset times, alerts and local token analytics. It reuses logins from supported desktop apps, CLIs and Edge/Chrome profiles; no new account, password or API key is required.
 
-Forked from [burakgon/ai-usage-menubar](https://github.com/burakgon/ai-usage-menubar) at v0.4.0 (`f0c9cfe`). Development lives on `develop`; `main` mirrors upstream. This fork is built locally and is not published as a signed/notarized release.
+Forked from [burakgon/ai-usage-menubar](https://github.com/burakgon/ai-usage-menubar) at v0.4.0 (`f0c9cfe`). It has since diverged from upstream; development lives on `develop`, and upstream is kept only as a reference. This fork is built locally and is not published as a signed/notarized release.
 
 ## Contents
 
@@ -69,7 +69,7 @@ If a card has an API warning, inspect it before choosing **Update**. Update ackn
 | **Cursor / X Subscription** | Total/Auto/API usage, or the shared weekly pool with Cursor/Grok product split, additional usage, prepaid balance | Cursor desktop, Edge, Chrome |
 | **Antigravity** | Antigravity app Gemini, Argon and 3rd-party pools; Code Assist excluded | Antigravity desktop |
 | **GitHub Copilot** | Monthly and completions quotas, unlimited plans | Copilot editor login, GitHub CLI |
-| **Gemini** | Five-hour and weekly Gemini app limits | Gemini desktop app, Edge, Chrome |
+| **Gemini** | Five-hour and weekly Gemini app limits, AI credits, Google Flow and Flow Music credits | Gemini desktop app (optionally + Edge/Chrome for Flow), Edge, Chrome |
 | **Muse** | Weekly usage, top-up balance | Edge, Chrome |
 | **Adobe** | Monthly generative credits, Firefly credits | Edge, Chrome |
 | **Manus** | Daily and monthly credits | Manus desktop, Edge, Chrome |

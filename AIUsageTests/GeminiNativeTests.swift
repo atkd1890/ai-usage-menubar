@@ -139,12 +139,12 @@ final class GeminiNativeTests: XCTestCase {
     }
 
     @MainActor
-    func testPermissionIsSeparateForEachSourceAndNativeIsDefault() {
+    func testPermissionIsSeparateForEachSourceAndCombinedDesktopIsDefault() {
         let suite = "GeminiNativePreferences.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let preferences = AppPreferences(defaults: defaults)
-        XCTAssertEqual(preferences.geminiSource, .nativeApp)
+        XCTAssertEqual(preferences.geminiSource, .nativeAppEdge)
         XCTAssertFalse(preferences.geminiCredentialAccessAllowed)
         preferences.geminiSource = .chrome
         preferences.geminiCredentialAccessAllowed = true

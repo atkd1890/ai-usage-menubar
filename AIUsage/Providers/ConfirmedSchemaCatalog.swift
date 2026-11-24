@@ -681,6 +681,15 @@ enum ConfirmedSchemaCatalog {
         // Confirmed-ignored: #4 (title), #5 (description), #6 (learn_more_url).
         "Gemini Native OverageCreditPool": EndpointConfirmedSchema(
             protobufTags: [1, 2, 3, 4, 5, 6]
+        ),
+        // Flow Music `/__api/billing/credits` response:
+        "Gemini Flow Music": EndpointConfirmedSchema(
+            jsonKeys: ["data", "add_token_transactions"],
+            requiredJSONKeys: ["data"]
+        ),
+        "Gemini Flow Music data": EndpointConfirmedSchema(
+            jsonKeys: ["credits_remaining", "tokens_remaining"],
+            requiredJSONKeys: ["credits_remaining"]
         )
     ])
 

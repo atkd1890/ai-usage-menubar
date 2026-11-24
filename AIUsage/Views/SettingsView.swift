@@ -34,6 +34,12 @@ struct SettingsView: View {
         .onChange(of: preferences.geminiNativeAccessAllowed) { _, _ in
             store.refreshNow()
         }
+        .onChange(of: preferences.geminiEdgeCookiesAllowed) { _, _ in
+            store.refreshNow()
+        }
+        .onChange(of: preferences.geminiChromeCookiesAllowed) { _, _ in
+            store.refreshNow()
+        }
         .onChange(of: preferences.geminiSource) { _, _ in
             store.refreshNow()
         }
@@ -386,16 +392,16 @@ private struct ProviderSettingsRow: View {
                         loginChanged()
                     }
                     .frame(width: 184, alignment: .leading)
-                    if [ProviderID.manus, .muse, .qwen, .kimi, .adobe, .minimax, .qoder, .dola, .buddy, .zai].contains(descriptor.id),
+                    if [ProviderID.manus, .muse, .qwen, .kimi, .adobe, .minimax, .qoder, .dola, .buddy, .zai, .gemini].contains(descriptor.id),
                        state?.failure?.kind == .storage {
                         let method = preferences.loginMethod(for: descriptor.id)
-                        if method == .edge {
+                        if method == .edge || method == .desktopEdge {
                             Button("Allow Edge access…") {
                                 if BrowserDatabaseAccess.request(providerName: displayName, source: .edge) { loginChanged() }
                             }
                             .controlSize(.small)
                             .help("Choose only Edge Default's Cookies file using the macOS permission dialog.")
-                        } else if method == .chrome {
+                        } else if method == .chrome || method == .desktopChrome {
                             Button("Allow Chrome access…") {
                                 if BrowserDatabaseAccess.request(providerName: displayName, source: .chrome) { loginChanged() }
                             }
