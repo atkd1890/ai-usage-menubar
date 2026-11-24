@@ -5,7 +5,7 @@ Read this file on every coding task. Keep universal working rules here; product 
 ## Project and scope
 
 - Native macOS 26+ menu bar app, Swift 6 / Xcode 27+, reusing existing logins.
-- Personal fork of `burakgon/ai-usage-menubar` at v0.4.0 (`f0c9cfe`). Work on `develop`; `main` mirrors upstream. Merge `upstream/main` when syncing.
+- Independent project, originally forked from `burakgon/ai-usage-menubar` at v0.4.0. Work on `develop` (the only branch). The `upstream` remote is reference-only.
 - Preserve existing user changes, staged changes and persisted user data. Never discard, overwrite, commit or push them without explicit instruction.
 - Never automatically commit/push. When requested, use one logical change per commit, an imperative summary and a body describing user-visible behavior.
 - Stay within the requested scope; document discovered gaps rather than fixing unrelated runtime behavior as part of a documentation change.
@@ -79,7 +79,7 @@ xcodebuild test -project AIUsage.xcodeproj -scheme AIUsage \
 - Install and launch local builds only from `/Applications/AI Usage.app` (fallback `~/Applications` only when `/Applications` is not writable), and do not leave duplicate copies in `~/Applications/AI Usage.app`. Register the installed bundle with `lsregister -f` and unregister temporary build outputs (`DerivedData-*`) so menu bar managers (e.g. Hidden Bar) recognize it as the active system app. Verify the running executable path after restart.
 - Never commit `DerivedData-*`, `dist/`, credentials or local usage databases.
 - Preserve upstream release/OTA configuration (`appcast.xml`, Sparkle keys and packaging scripts); do not publish fork releases unless explicitly requested.
-- Preserve removals of Devin, Kiro and standalone Grok during upstream merges (`zai` is enabled in this fork); reintroducing any removed provider requires new contract verification.
+- When porting or cherry-picking from a newer upstream release, bump `UpdateController.syncedUpstreamVersion` (in `AIUsage/Services/UpdateController.swift`) along with `UpdateConfigurationTests` and `SPECS.md` so the passive `Upstream <version>` footer notice hides until a strictly higher upstream release ships.
 
 ## Documentation
 
