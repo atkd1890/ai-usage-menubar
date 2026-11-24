@@ -94,8 +94,8 @@ Current summary/detail conventions live in `ProviderDetailsLayout`: Claude, Code
 
 - Publish each completed provider fetch independently. A provider waiting for its normal macOS permission prompt must not hold every other card at Connecting. Discard obsolete generations/source results and keep the latest successful-refresh timestamp monotonic.
 
-- Rotating refresh tokens must survive relaunch in this app's provider-specific session store, bound to the originating credential fingerprint. Do not replay a stale browser/native refresh token over a newer persisted rotation.
-- Refresh before expiry where supported; normalize token encoding/prefixes according to the provider contract. Bound retries after auth rejection and discard rejected persisted sessions. Do not create a refresh/retry loop.
+- Rotating refresh tokens must survive relaunch in this app's provider-specific session store, bound to the originating credential fingerprint. Do not replay a stale browser/native refresh token over a newer persisted rotation. Serialize rotating refreshes (and session forks) single-flight inside an unstructured cancellation-safe task so concurrent fetches or caller cancellation (such as `UsageStore.cancelRefresh()`) never drop or reuse a rotated refresh token.
+- Refresh and proactively renew sessions before expiry where supported; normalize token encoding/prefixes according to the provider contract. Bound retries after auth rejection, classify refresh errors strictly so transient or rate-limit responses never wipe persisted sessions, and discard persisted sessions only on confirmed authentication rejection or account mismatch, then reload fresh source credentials (including untouched source cookies for forked sessions). Do not create a refresh/retry loop.
 - Reusing a login must not revoke the source app/browser session. Preserve Qwen's independent-session forking; do not replace it with direct consumption of the browser's rotating session. Respect provider-specific refresh opt-ins (including Kimi's existing gate), and never enable one implicitly.
 - Account email/profile lookup is supplementary, not a condition for showing quota. Cache the attempt per source selection, including failure; do not hit profile endpoints on every poll. Use a verified email or a scoped one-way identity for history, never display a session hash as an email.
 
@@ -199,8 +199,8 @@ Current summary/detail conventions live in `ProviderDetailsLayout`: Claude, Code
 
 - Region: CN.
 - Login methods (default first): Qwen desktop; Edge; Chrome.
-- Credential source: Qwen app / browser Local Storage `qwen_access_token_state`, `refresh_token` cookie.
-- Read-only endpoints: `auth.qwen.ai` refresh + `authorize/code` (forks an independent session so the app/browser login is not revoked); `sg-entitlement.qwen.com`, `sg-member.qwen.com`.
+- Credential source: Qwen app (`Cookies` or `Network/Cookies`) / browser Local Storage `qwen_access_token_state`, `refresh_token` cookie.
+- Read-only endpoints: `auth.qwen.ai` refresh + `authorize/code` (forks an independent session so the app/browser login is not revoked, and proactively renews expiring JWT refresh tokens before expiry); `sg-entitlement.qwen.com`, `sg-member.qwen.com`.
 - Data families: Daily/weekly allowance; model-frequency limits; video/image and discovered entitlements; counts/reset; reset cards and expiry.
 
 ### MiniMax
@@ -264,7 +264,7 @@ Current summary/detail conventions live in `ProviderDetailsLayout`: Claude, Code
 - Muse: bounded first-party public-chunk discovery may recover a rotated subscription action ID; never execute downloaded code. Do not duplicate the same top-up amount in both the header balance and billing row.
 - Adobe: keep total Monthly and Firefly sub-allowance distinct; do not sum them.
 - Kimi: preserve the native refresh opt-in and rotated-token persistence; strip token prefixes only as required by the established contract.
-- Qwen: fork an independent session before refreshing so the selected native/ browser login is not revoked. Persist rotation and ignore stale disk cookies.
+- Qwen: fork an independent session before refreshing so the selected native/browser login is not revoked. Refresh access tokens 3 minutes before expiry, serialize refreshes and forks single-flight in cancellation-safe tasks, persist rotations (ignoring deletion `Set-Cookie` headers), classify refresh errors strictly so transient/rate-limit errors keep `qwen-auth.json`, proactively renew expiring JWT refresh tokens via `authorize/code` with a 1-hour failure cooldown, invalidate mismatched JWT account switches, and reload fresh source credentials (including untouched cookies for forked sessions) when a persisted session is revoked.
 - MiniMax: distinguish Token Plan allowance/credits from free Agent, Design and Hailuo wallets. Free Agent credit belongs in Additional Credits when there is no Token Plan; paid Token Plan credits retain their own bounded progress.
 - Qoder: separate personal quota, add-on credits and organization resource pool.
 
@@ -336,3 +336,7 @@ The no-subscription response is live-verified using Edge, including reported usa
 ### Shared credential error messages
 
 Shared cookie/crypto readers must be provider-neutral. Provider adapters add their own name and selected source to storage errors; never leak another provider’s error text (e.g. Gemini) through a shared helper. Distinguish local decryption/storage failure from API session rejection and network unavailability, and never hide it with a fallback login.
+
+### Single-flight rotation in Qoder and MiniMax
+
+`QoderProvider` and `MiniMaxProvider` desktop OAuth refreshes persist rotated tokens, but do not yet wrap refreshes in an unstructured single-flight task to protect against actor reentrancy or mid-refresh caller cancellation; tracked as an audit follow-up outside the current Qwen scope.

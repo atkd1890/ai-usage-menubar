@@ -44,7 +44,7 @@ Read this file on every coding task. Keep universal working rules here; product 
 - Read macOS Keychain items only through `SecurityKeychainAccessor` (`/usr/bin/security`); never call `SecItemCopyMatching` directly from the app binary, because local/ad-hoc builds lack stable code-signing ACL persistence and re-prompt for the user's password on every launch/rebuild.
 - Source app SQLite/LevelDB/auth storage is read-only. Only established Claude/Codex token-rotation writeback may update its originating auth source. Other provider rotations belong in this app's source-bound session store.
 - Report macOS permission denial as storage failure. Use the normal user-granted permission/security-scoped bookmark path; never copy blocked databases, use immutable mode/helpers or bypass Keychain, signing, CAPTCHA or anti-bot gates.
-- Never call generation/chat, purchase or reset-redemption endpoints. Auth refresh must preserve the source app/browser login and use bounded retries.
+- Never call generation/chat, purchase or reset-redemption endpoints. Auth refresh must preserve the source app/browser login, serialize rotating refresh-token calls single-flight inside an unstructured cancellation-safe task that persists rotations before returning, clear persisted sessions only on explicit authentication rejection (never on transient or rate-limit responses), proactively refresh or renew tokens before expiry, and use bounded retries.
 - Parse/store/export only usage metadata from logs, never conversation content.
 
 ## Data and compatibility

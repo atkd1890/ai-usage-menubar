@@ -1,6 +1,13 @@
 import CryptoKit
 import Foundation
 
+struct QwenJWTClaims: Equatable, Sendable {
+    let expiresAt: Date?
+    let issuedAt: Date?
+    let userID: String?
+    let type: String?
+}
+
 struct QwenCredential: Sendable {
     let access: String?
     let refresh: String?
@@ -22,15 +29,32 @@ struct QwenCredential: Sendable {
         !value.isEmpty && !value.contains(where: { $0.isWhitespace || $0 == ";" || $0 == "\"" || $0 == "\\" })
     }
 
-    static func jwtExpiration(_ token: String) -> Date? {
+    static func jwtClaims(_ token: String) -> QwenJWTClaims? {
         let parts = token.split(separator: ".")
         guard parts.count == 3,
               let data = ProviderParsing.base64URLData(String(parts[1])),
-              let object = try? ProviderParsing.object(from: data),
-              let exp = QuotaDiscovery.number(object["exp"]) else {
+              let object = try? ProviderParsing.object(from: data) else {
             return nil
         }
-        return Date(timeIntervalSince1970: exp)
+        let expiresAt = QuotaDiscovery.number(object["exp"]).map { Date(timeIntervalSince1970: $0) }
+        let issuedAt = QuotaDiscovery.number(object["iat"]).map { Date(timeIntervalSince1970: $0) }
+        let userID: String? = if let stringID = ProviderParsing.string(object["id"]) {
+            stringID
+        } else if let numericID = QuotaDiscovery.number(object["id"]) {
+            String(Int64(numericID))
+        } else {
+            nil
+        }
+        return QwenJWTClaims(
+            expiresAt: expiresAt,
+            issuedAt: issuedAt,
+            userID: userID,
+            type: ProviderParsing.string(object["type"])
+        )
+    }
+
+    static func jwtExpiration(_ token: String) -> Date? {
+        jwtClaims(token)?.expiresAt
     }
 }
 
@@ -41,6 +65,7 @@ struct QwenPersistedSession: Codable, Equatable, Sendable {
     var expiresAt: Date
     var email: String?
     var isForked: Bool
+    var refreshTokenExpiresAt: Date? = nil
 }
 
 struct QwenSessionStore: Sendable {
@@ -183,12 +208,21 @@ enum QwenNativeSession {
             }
         }
 
+        let resolvedCookiesPath: String = if files.exists(cookiesPath) {
+            cookiesPath
+        } else if cookiesPath == Self.desktopCookiesPath,
+                  files.exists("~/Library/Application Support/Qwen/Network/Cookies") {
+            "~/Library/Application Support/Qwen/Network/Cookies"
+        } else {
+            cookiesPath
+        }
+
         var refresh: String?
         var storageError: ProviderFailure?
-        if files.exists(cookiesPath) {
+        if files.exists(resolvedCookiesPath) {
             do {
                 if let raw = try sqlite.queryValue(
-                    path: cookiesPath,
+                    path: resolvedCookiesPath,
                     sql: "SELECT value FROM cookies WHERE host_key IN ('qwen.ai', '.qwen.ai') AND name='refresh_token' LIMIT 1"
                 ) {
                     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -270,6 +304,11 @@ actor QwenProvider: UsageProvider {
         return components?.url
     }
 
+    static let proactiveAccessRefreshLeadTime: TimeInterval = 180
+    static let proactiveRenewalCooldown: TimeInterval = 3600
+    static let minRefreshRenewalLeadTime: TimeInterval = 6 * 3600
+    static let maxRefreshRenewalLeadTime: TimeInterval = 3 * 24 * 3600
+
     private static let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
 
     private let http: any HTTPClient
@@ -278,6 +317,16 @@ actor QwenProvider: UsageProvider {
     private let now: @Sendable () -> Date
 
     private var cache: [String: QwenPersistedSession] = [:]
+    private var activeRefresh: (key: String, task: Task<QwenPersistedSession, Error>)?
+    private var activeFork: (key: String, task: Task<QwenPersistedSession?, Never>)?
+    private var lastProactiveRenewalAttemptAt: [String: Date] = [:]
+
+    private struct RecoveredSession {
+        let persisted: QwenPersistedSession?
+        let access: String
+        let email: String?
+        let needsFork: Bool
+    }
 
     init(
         http: (any HTTPClient)? = nil,
@@ -306,17 +355,26 @@ actor QwenProvider: UsageProvider {
         }
 
         let sourceLabel: String
-        let seedFingerprint: String
+        var seedFingerprint: String
         let historyID: String
         var persisted: QwenPersistedSession?
 
         if let credential = loadedCredential {
             sourceLabel = credential.sourceLabel
-            seedFingerprint = credential.fingerprintHex
-            historyID = credential.historyID
-            if let existing = cache[sourceLabel] ?? sessionStore?.load(for: sourceLabel) {
+            var existing = cache[sourceLabel] ?? sessionStore?.load(for: sourceLabel)
+            if let currentPersisted = existing,
+               Self.hasAccountMismatch(credential: credential, persisted: currentPersisted) {
+                clearPersistedSession(for: sourceLabel)
+                existing = nil
+            }
+            if let existing {
                 cache[sourceLabel] = existing
                 persisted = existing
+                seedFingerprint = existing.seedFingerprint
+                historyID = "qwen-session:" + existing.seedFingerprint
+            } else {
+                seedFingerprint = credential.fingerprintHex
+                historyID = credential.historyID
             }
         } else {
             let fallbackLabel = QwenNativeSession.sourceLabel(for: ProviderLoginMethod.selected(for: .qwen))
@@ -335,7 +393,7 @@ actor QwenProvider: UsageProvider {
         var needsFork = false
 
         if let current = persisted {
-            if current.expiresAt.timeIntervalSince(now()) > 60 {
+            if current.expiresAt.timeIntervalSince(now()) > Self.proactiveAccessRefreshLeadTime {
                 access = current.accessToken
                 email = current.email
                 needsFork = (current.refreshToken == nil)
@@ -353,38 +411,43 @@ actor QwenProvider: UsageProvider {
                     email = refreshed.email
                     needsFork = false
                 } catch let failure as ProviderFailure where failure.kind == .authentication {
-                    clearPersistedSession(for: sourceLabel)
-                    persisted = nil
-                    if let credential = loadedCredential {
-                        if let localAccess = credential.access,
-                           localAccess != current.accessToken,
-                           QwenCredential.jwtExpiration(localAccess).map({ $0.timeIntervalSince(now()) > 60 }) ?? true {
-                            access = localAccess
-                            email = nil
-                            needsFork = (QwenCredential.jwtExpiration(localAccess) != nil)
-                        } else if let diskRefresh = credential.refresh,
-                                  diskRefresh != persistedRefresh,
-                                  credential.fingerprintHex != current.seedFingerprint {
-                            let refreshed = try await refreshAccess(
-                                refreshToken: diskRefresh,
-                                seedFingerprint: credential.fingerprintHex,
-                                sourceLabel: sourceLabel,
-                                isForked: false
-                            )
-                            persisted = refreshed
-                            access = refreshed.accessToken
-                            email = refreshed.email
-                            needsFork = false
-                        } else {
-                            throw failure
+                    if let recovered = try await recoverAfterAuthFailure(
+                        failedSession: current,
+                        failedAccess: current.accessToken,
+                        failedRefresh: persistedRefresh,
+                        loadedCredential: loadedCredential,
+                        sourceLabel: sourceLabel
+                    ) {
+                        persisted = recovered.persisted
+                        access = recovered.access
+                        email = recovered.email
+                        needsFork = recovered.needsFork
+                        if let recoveredFingerprint = recovered.persisted?.seedFingerprint {
+                            seedFingerprint = recoveredFingerprint
                         }
                     } else {
                         throw failure
                     }
                 }
             } else {
-                clearPersistedSession(for: sourceLabel)
-                persisted = nil
+                if let recovered = try await recoverAfterAuthFailure(
+                    failedSession: current,
+                    failedAccess: current.accessToken,
+                    failedRefresh: nil,
+                    loadedCredential: loadedCredential,
+                    sourceLabel: sourceLabel
+                ) {
+                    persisted = recovered.persisted
+                    access = recovered.access
+                    email = recovered.email
+                    needsFork = recovered.needsFork
+                    if let recoveredFingerprint = recovered.persisted?.seedFingerprint {
+                        seedFingerprint = recoveredFingerprint
+                    }
+                } else {
+                    clearPersistedSession(for: sourceLabel)
+                    persisted = nil
+                }
             }
         }
 
@@ -411,8 +474,18 @@ actor QwenProvider: UsageProvider {
         }
 
         for attempt in 0...1 {
+            try Task.checkCancellation()
             let agentUsage = try await send(url: Self.agentUsageURL, method: .get, token: access)
             if attempt == 0, Self.isAuthRejected(agentUsage) {
+                if let newer = cache[sourceLabel],
+                   newer.accessToken != access,
+                   newer.expiresAt.timeIntervalSince(now()) > 60 {
+                    persisted = newer
+                    access = newer.accessToken
+                    email = newer.email ?? email
+                    needsFork = (newer.refreshToken == nil)
+                    continue
+                }
                 if let activePersisted = persisted, let persistedRefresh = activePersisted.refreshToken {
                     do {
                         let refreshed = try await refreshAccess(
@@ -428,39 +501,42 @@ actor QwenProvider: UsageProvider {
                         needsFork = false
                         continue
                     } catch let failure as ProviderFailure where failure.kind == .authentication {
-                        clearPersistedSession(for: sourceLabel)
-                        persisted = nil
-                        if let credential = loadedCredential {
-                            if let localAccess = credential.access,
-                               localAccess != access,
-                               QwenCredential.jwtExpiration(localAccess).map({ $0.timeIntervalSince(now()) > 60 }) ?? false {
-                                access = localAccess
-                                needsFork = true
-                                continue
-                            } else if let diskRefresh = credential.refresh,
-                                      diskRefresh != persistedRefresh,
-                                      credential.fingerprintHex != activePersisted.seedFingerprint {
-                                let refreshed = try await refreshAccess(
-                                    refreshToken: diskRefresh,
-                                    seedFingerprint: credential.fingerprintHex,
-                                    sourceLabel: sourceLabel,
-                                    existingEmail: email,
-                                    isForked: false
-                                )
-                                persisted = refreshed
-                                access = refreshed.accessToken
-                                email = refreshed.email ?? email
-                                needsFork = false
-                                continue
+                        if let recovered = try await recoverAfterAuthFailure(
+                            failedSession: activePersisted,
+                            failedAccess: access,
+                            failedRefresh: persistedRefresh,
+                            loadedCredential: loadedCredential,
+                            sourceLabel: sourceLabel
+                        ) {
+                            persisted = recovered.persisted
+                            access = recovered.access
+                            email = recovered.email ?? email
+                            needsFork = recovered.needsFork
+                            if let recoveredFingerprint = recovered.persisted?.seedFingerprint {
+                                seedFingerprint = recoveredFingerprint
                             }
+                            continue
                         }
                         throw failure
                     }
-                } else if let diskRefresh = loadedCredential?.refresh {
-                    if persisted != nil {
-                        clearPersistedSession(for: sourceLabel)
-                        persisted = nil
+                } else if let activePersisted = persisted {
+                    if let recovered = try await recoverAfterAuthFailure(
+                        failedSession: activePersisted,
+                        failedAccess: access,
+                        failedRefresh: nil,
+                        loadedCredential: loadedCredential,
+                        sourceLabel: sourceLabel
+                    ) {
+                        persisted = recovered.persisted
+                        access = recovered.access
+                        email = recovered.email ?? email
+                        needsFork = recovered.needsFork
+                        if let recoveredFingerprint = recovered.persisted?.seedFingerprint {
+                            seedFingerprint = recoveredFingerprint
+                        }
+                        continue
                     }
+                } else if let diskRefresh = loadedCredential?.refresh {
                     let refreshed = try await refreshAccess(
                         refreshToken: diskRefresh,
                         seedFingerprint: seedFingerprint,
@@ -493,6 +569,7 @@ actor QwenProvider: UsageProvider {
                     sourceLabel: sourceLabel,
                     existingEmail: email
                 ) {
+                    persisted = forked
                     email = forked.email ?? email
                 } else if let exp = QwenCredential.jwtExpiration(access) {
                     let saved = QwenPersistedSession(
@@ -506,10 +583,29 @@ actor QwenProvider: UsageProvider {
                     cache[sourceLabel] = saved
                     sessionStore?.save(saved, for: sourceLabel)
                 }
-            } else if let email, var existing = cache[sourceLabel], existing.email != email {
-                existing.email = email
-                cache[sourceLabel] = existing
-                sessionStore?.save(existing, for: sourceLabel)
+            } else {
+                if let email, var existing = cache[sourceLabel], existing.email != email {
+                    existing.email = email
+                    cache[sourceLabel] = existing
+                    sessionStore?.save(existing, for: sourceLabel)
+                    persisted = existing
+                }
+                if let active = persisted ?? cache[sourceLabel],
+                   Self.shouldProactivelyRenewRefreshToken(active, now: now()),
+                   lastProactiveRenewalAttemptAt[sourceLabel].map({ now().timeIntervalSince($0) >= Self.proactiveRenewalCooldown }) ?? true {
+                    lastProactiveRenewalAttemptAt[sourceLabel] = now()
+                    let currentRefreshExpiry = active.refreshTokenExpiresAt
+                        ?? active.refreshToken.flatMap(QwenCredential.jwtExpiration)
+                    if let renewed = await forkIndependentSession(
+                        accessToken: access,
+                        seedFingerprint: active.seedFingerprint,
+                        sourceLabel: sourceLabel,
+                        existingEmail: email,
+                        minimumRefreshExpiry: currentRefreshExpiry
+                    ) {
+                        email = renewed.email ?? email
+                    }
+                }
             }
 
             return try Self.map(
@@ -527,9 +623,113 @@ actor QwenProvider: UsageProvider {
         throw ProviderFailure(.authentication, "Qwen session expired. Sign in to \(sourceLabel) again.")
     }
 
+    static func shouldProactivelyRenewRefreshToken(_ session: QwenPersistedSession, now: Date) -> Bool {
+        guard let refresh = session.refreshToken else { return false }
+        let claims = QwenCredential.jwtClaims(refresh)
+        guard let expiresAt = session.refreshTokenExpiresAt ?? claims?.expiresAt else {
+            return false
+        }
+        let leadTime: TimeInterval
+        if let issuedAt = claims?.issuedAt {
+            let ttl = expiresAt.timeIntervalSince(issuedAt)
+            if ttl > 0 {
+                leadTime = max(minRefreshRenewalLeadTime, min(maxRefreshRenewalLeadTime, ttl * 0.25))
+            } else {
+                leadTime = 24 * 3600
+            }
+        } else {
+            leadTime = 24 * 3600
+        }
+        return expiresAt.timeIntervalSince(now) <= leadTime
+    }
+
+    private static func hasAccountMismatch(credential: QwenCredential, persisted: QwenPersistedSession) -> Bool {
+        let persistedUserID = QwenCredential.jwtClaims(persisted.accessToken)?.userID
+            ?? persisted.refreshToken.flatMap { QwenCredential.jwtClaims($0)?.userID }
+        let diskUserID = credential.refresh.flatMap { QwenCredential.jwtClaims($0)?.userID }
+            ?? credential.access.flatMap { QwenCredential.jwtClaims($0)?.userID }
+        guard let persistedUserID, let diskUserID else { return false }
+        return persistedUserID != diskUserID
+    }
+
+    private func reloadCredentials() async -> QwenCredential? {
+        let loader = loadCredentials
+        return try? await Task.detached(priority: .utility) { try loader() }.value
+    }
+
+    private func recoverAfterAuthFailure(
+        failedSession: QwenPersistedSession,
+        failedAccess: String,
+        failedRefresh: String?,
+        loadedCredential: QwenCredential?,
+        sourceLabel: String
+    ) async throws -> RecoveredSession? {
+        clearPersistedSession(for: sourceLabel)
+        let fresh = await reloadCredentials() ?? loadedCredential
+        guard let fresh else { return nil }
+
+        if let localAccess = fresh.access,
+           localAccess != failedAccess,
+           QwenCredential.jwtExpiration(localAccess).map({ $0.timeIntervalSince(now()) > 60 }) ?? true {
+            return RecoveredSession(
+                persisted: nil,
+                access: localAccess,
+                email: nil,
+                needsFork: QwenCredential.jwtExpiration(localAccess) != nil
+            )
+        }
+
+        if let diskRefresh = fresh.refresh,
+           diskRefresh != failedRefresh,
+           failedRefresh == nil || failedSession.isForked || fresh.fingerprintHex != failedSession.seedFingerprint {
+            let refreshed = try await refreshAccess(
+                refreshToken: diskRefresh,
+                seedFingerprint: fresh.fingerprintHex,
+                sourceLabel: sourceLabel,
+                isForked: false
+            )
+            return RecoveredSession(
+                persisted: refreshed,
+                access: refreshed.accessToken,
+                email: refreshed.email,
+                needsFork: false
+            )
+        }
+
+        return nil
+    }
+
     private func clearPersistedSession(for sourceLabel: String) {
         cache.removeValue(forKey: sourceLabel)
         sessionStore?.remove(for: sourceLabel)
+    }
+
+    private func finishRefresh(key: String, sourceLabel: String, session: QwenPersistedSession) {
+        cache[sourceLabel] = session
+        sessionStore?.save(session, for: sourceLabel)
+        if activeRefresh?.key == key {
+            activeRefresh = nil
+        }
+    }
+
+    private func clearActiveRefresh(key: String) {
+        if activeRefresh?.key == key {
+            activeRefresh = nil
+        }
+    }
+
+    private func finishFork(key: String, sourceLabel: String, session: QwenPersistedSession) {
+        cache[sourceLabel] = session
+        sessionStore?.save(session, for: sourceLabel)
+        if activeFork?.key == key {
+            activeFork = nil
+        }
+    }
+
+    private func clearActiveFork(key: String) {
+        if activeFork?.key == key {
+            activeFork = nil
+        }
     }
 
     private func refreshAccess(
@@ -539,90 +739,130 @@ actor QwenProvider: UsageProvider {
         existingEmail: String? = nil,
         isForked: Bool = false
     ) async throws -> QwenPersistedSession {
-        let response = try await http.send(HTTPRequest(
-            method: .get,
-            url: Self.refreshURL,
-            headers: Self.refreshHeaders(cookie: "refresh_token=" + refreshToken),
-            body: nil
-        ))
+        let key = sourceLabel + "\0" + refreshToken
+        if let active = activeRefresh, active.key == key {
+            return try await active.task.value
+        }
 
-        let parsed = try parseTokenResponse(response)
-        let session = QwenPersistedSession(
-            seedFingerprint: seedFingerprint,
-            accessToken: parsed.access,
-            refreshToken: parsed.refresh ?? refreshToken,
-            expiresAt: parsed.expiresAt,
-            email: parsed.email ?? existingEmail,
-            isForked: isForked
-        )
-        cache[sourceLabel] = session
-        sessionStore?.save(session, for: sourceLabel)
-        return session
+        let http = self.http
+        let nowProvider = self.now
+        let task = Task<QwenPersistedSession, Error> {
+            do {
+                let response = try await http.send(HTTPRequest(
+                    method: .get,
+                    url: Self.refreshURL,
+                    headers: Self.refreshHeaders(cookie: "refresh_token=" + refreshToken),
+                    body: nil
+                ))
+                let parsed = try Self.parseTokenResponse(response, now: nowProvider())
+                let nextRefresh = parsed.refresh ?? refreshToken
+                let refreshExpiresAt = QwenCredential.jwtExpiration(nextRefresh)
+                let session = QwenPersistedSession(
+                    seedFingerprint: seedFingerprint,
+                    accessToken: parsed.access,
+                    refreshToken: nextRefresh,
+                    expiresAt: parsed.expiresAt,
+                    email: parsed.email ?? existingEmail,
+                    isForked: isForked,
+                    refreshTokenExpiresAt: refreshExpiresAt
+                )
+                self.finishRefresh(key: key, sourceLabel: sourceLabel, session: session)
+                return session
+            } catch {
+                self.clearActiveRefresh(key: key)
+                throw error
+            }
+        }
+        activeRefresh = (key, task)
+        return try await task.value
     }
 
     private func forkIndependentSession(
         accessToken: String,
         seedFingerprint: String,
         sourceLabel: String,
-        existingEmail: String?
+        existingEmail: String?,
+        minimumRefreshExpiry: Date? = nil
     ) async -> QwenPersistedSession? {
-        guard let codeResponse = try? await http.send(HTTPRequest(
-            method: .get,
-            url: Self.authorizeCodeURL,
-            headers: Self.refreshHeaders(authorization: "Bearer " + accessToken),
-            body: nil
-        )),
-        codeResponse.statusCode == 200,
-        let codeRoot = try? ProviderParsing.object(from: codeResponse.body),
-        codeRoot["success"] as? Bool == true,
-        let codeData = codeRoot["data"] as? [String: Any],
-        let code = codeData["code"] as? String,
-        !code.isEmpty,
-        let exchangeURL = Self.refreshWithCodeURL(code) else {
-            return nil
+        let key = sourceLabel + "\0" + accessToken
+        if let active = activeFork, active.key == key {
+            return await active.task.value
         }
 
-        guard let exchangeResponse = try? await http.send(HTTPRequest(
-            method: .get,
-            url: exchangeURL,
-            headers: Self.refreshHeaders(),
-            body: nil
-        )),
-        let parsed = try? parseTokenResponse(exchangeResponse),
-        let forkedRefresh = parsed.refresh else {
-            return nil
-        }
+        let http = self.http
+        let nowProvider = self.now
+        let task = Task<QwenPersistedSession?, Never> {
+            guard let codeResponse = try? await http.send(HTTPRequest(
+                method: .get,
+                url: Self.authorizeCodeURL,
+                headers: Self.refreshHeaders(authorization: "Bearer " + accessToken),
+                body: nil
+            )),
+            codeResponse.statusCode == 200,
+            let codeRoot = try? ProviderParsing.object(from: codeResponse.body),
+            codeRoot["success"] as? Bool == true,
+            let codeData = codeRoot["data"] as? [String: Any],
+            let code = codeData["code"] as? String,
+            !code.isEmpty,
+            let exchangeURL = Self.refreshWithCodeURL(code) else {
+                self.clearActiveFork(key: key)
+                return nil
+            }
 
-        let session = QwenPersistedSession(
-            seedFingerprint: seedFingerprint,
-            accessToken: parsed.access,
-            refreshToken: forkedRefresh,
-            expiresAt: parsed.expiresAt,
-            email: parsed.email ?? existingEmail,
-            isForked: true
-        )
-        cache[sourceLabel] = session
-        sessionStore?.save(session, for: sourceLabel)
-        return session
+            guard let exchangeResponse = try? await http.send(HTTPRequest(
+                method: .get,
+                url: exchangeURL,
+                headers: Self.refreshHeaders(),
+                body: nil
+            )),
+            let parsed = try? Self.parseTokenResponse(exchangeResponse, now: nowProvider()),
+            let forkedRefresh = parsed.refresh else {
+                self.clearActiveFork(key: key)
+                return nil
+            }
+
+            let forkedRefreshExpiresAt = QwenCredential.jwtExpiration(forkedRefresh)
+            if let minimumRefreshExpiry {
+                guard let forkedRefreshExpiresAt, forkedRefreshExpiresAt > minimumRefreshExpiry else {
+                    self.clearActiveFork(key: key)
+                    return nil
+                }
+            }
+
+            let session = QwenPersistedSession(
+                seedFingerprint: seedFingerprint,
+                accessToken: parsed.access,
+                refreshToken: forkedRefresh,
+                expiresAt: parsed.expiresAt,
+                email: parsed.email ?? existingEmail,
+                isForked: true,
+                refreshTokenExpiresAt: forkedRefreshExpiresAt
+            )
+            self.finishFork(key: key, sourceLabel: sourceLabel, session: session)
+            return session
+        }
+        activeFork = (key, task)
+        return await task.value
     }
 
-    private func parseTokenResponse(
-        _ response: HTTPResponse
+    private static func parseTokenResponse(
+        _ response: HTTPResponse,
+        now: Date
     ) throws -> (access: String, refresh: String?, expiresAt: Date, email: String?) {
+        if response.statusCode == 429 {
+            throw ProviderFailure(.rateLimited, "Qwen session refresh is rate limited.")
+        }
         if [401, 403].contains(response.statusCode) {
             throw ProviderFailure(.authentication, "Qwen session expired. Sign in again.")
         }
         guard response.statusCode == 200 else {
-            throw ProviderFailure(
-                response.statusCode == 429 ? .rateLimited : .transient,
-                "Qwen session refresh failed (HTTP \(response.statusCode))."
-            )
+            throw ProviderFailure(.transient, "Qwen session refresh failed (HTTP \(response.statusCode)).")
         }
         guard let root = try? ProviderParsing.object(from: response.body) else {
             throw ProviderFailure(.invalidResponse, "Qwen refresh response format changed.")
         }
         if root["success"] as? Bool == false {
-            throw ProviderFailure(.authentication, "Qwen session expired. Sign in again.")
+            throw Self.classifyRefreshFailure(response: response, root: root)
         }
         guard let data = root["data"] as? [String: Any],
               let access = data["access_token"] as? String,
@@ -633,9 +873,74 @@ actor QwenProvider: UsageProvider {
             ?? Self.extractRefreshTokenCookie(from: response)
         let expiresAt = ProviderParsing.date(data["expires_at"])
             ?? QwenCredential.jwtExpiration(access)
-            ?? now().addingTimeInterval(600)
+            ?? now.addingTimeInterval(600)
         let email = AccountEmail.validated(data["email"])
         return (access, rotatedRefresh, expiresAt, email)
+    }
+
+    private static func classifyRefreshFailure(response: HTTPResponse, root: [String: Any]) -> ProviderFailure {
+        let actualStatus = response.header("x-actual-status-code")
+            .flatMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        let httpCode = QuotaDiscovery.number(root["httpCode"]).map(Int.init)
+        let data = root["data"] as? [String: Any]
+
+        let codes = [
+            response.header("x-error-code"),
+            ProviderParsing.string(root["errorCode"]),
+            ProviderParsing.string(root["code"]),
+            ProviderParsing.string(data?["code"]),
+            ProviderParsing.string(data?["errorCode"])
+        ].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+
+        let messages = [
+            ProviderParsing.string(data?["details"]),
+            ProviderParsing.string(data?["message"]),
+            ProviderParsing.string(root["message"])
+        ].compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+
+        if actualStatus == 429 || httpCode == 429 || codes.contains(where: {
+            $0.contains("rate") || $0.contains("too_many") || $0.contains("throttl") || $0.contains("limit_exceeded")
+        }) {
+            return ProviderFailure(.rateLimited, "Qwen session refresh is rate limited.")
+        }
+
+        let exactAuthCodes: Set<String> = [
+            "unauthorized",
+            "invalid token",
+            "invalid_token",
+            "forbidden",
+            "token_expired",
+            "token_revoked",
+            "invalid_grant",
+            "invalid_refresh_token",
+            "session_expired",
+            "not_logged_in"
+        ]
+        let authPhrases = [
+            "token is revoked",
+            "token has expired",
+            "invalid token",
+            "please login again",
+            "session expired"
+        ]
+        if [401, 403].contains(actualStatus ?? -1) ||
+           [401, 403].contains(httpCode ?? -1) ||
+           codes.contains(where: { code in
+               exactAuthCodes.contains(code) ||
+               code.contains("unauthorized") ||
+               code.contains("invalid_token") ||
+               code.contains("invalid token") ||
+               code.contains("token_expired") ||
+               code.contains("token_revoked") ||
+               code.contains("invalid_grant") ||
+               code.contains("session_expired") ||
+               code.contains("forbidden")
+           }) ||
+           messages.contains(where: { msg in authPhrases.contains(where: { msg.contains($0) }) }) {
+            return ProviderFailure(.authentication, "Qwen session expired. Sign in again.")
+        }
+
+        return ProviderFailure(.transient, "Qwen session refresh temporarily failed.")
     }
 
     private static func refreshHeaders(
@@ -665,14 +970,36 @@ actor QwenProvider: UsageProvider {
 
     static func extractRefreshTokenCookie(from response: HTTPResponse) -> String? {
         guard let setCookie = response.header("Set-Cookie") else { return nil }
-        let pattern = #"(?:^|[,;\s])refresh_token=([^;\s,]+)"#
+        let pattern = #"(?:^|[,;\s])refresh_token=([^;\s,"]+)"#
+        let nextCookiePattern = #",\s*[A-Za-z0-9_!#$%&'*+.^`|~-]+="#
+        let maxAgeZeroPattern = #"(?i)(?:^|;)\s*max-age\s*=\s*0(?:\s*(?:;|$))"#
         guard let regex = try? NSRegularExpression(pattern: pattern),
-              let match = regex.firstMatch(in: setCookie, range: NSRange(setCookie.startIndex..., in: setCookie)),
-              let range = Range(match.range(at: 1), in: setCookie) else {
+              let nextCookieRegex = try? NSRegularExpression(pattern: nextCookiePattern),
+              let maxAgeZeroRegex = try? NSRegularExpression(pattern: maxAgeZeroPattern) else {
             return nil
         }
-        let value = String(setCookie[range])
-        return QwenCredential.valid(value) ? value : nil
+
+        let nsSetCookie = setCookie as NSString
+        let matches = regex.matches(in: setCookie, range: NSRange(location: 0, length: nsSetCookie.length))
+        var latestValid: String?
+        for match in matches {
+            guard let valueRange = Range(match.range(at: 1), in: setCookie) else { continue }
+            let value = String(setCookie[valueRange])
+            let lowercased = value.lowercased()
+            guard lowercased != "deleted", lowercased != "null", QwenCredential.valid(value) else {
+                continue
+            }
+
+            let attrStart = match.range.location + match.range.length
+            let tailRange = NSRange(location: attrStart, length: nsSetCookie.length - attrStart)
+            let attrEnd = nextCookieRegex.firstMatch(in: setCookie, range: tailRange)?.range.location ?? nsSetCookie.length
+            let attrRange = NSRange(location: attrStart, length: attrEnd - attrStart)
+            if maxAgeZeroRegex.firstMatch(in: setCookie, range: attrRange) != nil {
+                continue
+            }
+            latestValid = value
+        }
+        return latestValid
     }
 
     private func send(url: URL, method: HTTPRequest.Method, token: String, body: Data? = nil) async throws -> HTTPResponse {
@@ -691,6 +1018,10 @@ actor QwenProvider: UsageProvider {
 
     private static func isAuthRejected(_ response: HTTPResponse) -> Bool {
         if [401, 403].contains(response.statusCode) { return true }
+        if let actual = response.header("x-actual-status-code").flatMap({ Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) }),
+           [401, 403].contains(actual) {
+            return true
+        }
         guard let root = try? JSONSerialization.jsonObject(with: response.body) as? [String: Any] else {
             return false
         }
@@ -701,7 +1032,7 @@ actor QwenProvider: UsageProvider {
             let errorCode = (root["errorCode"] as? String)
                 ?? ((root["data"] as? [String: Any])?["code"] as? String)
             if let code = errorCode?.lowercased(),
-               code.contains("unauthorized") || code.contains("token") || code.contains("auth") {
+               code.contains("unauthorized") || code.contains("token") || code.contains("auth") || code.contains("forbidden") {
                 return true
             }
         }

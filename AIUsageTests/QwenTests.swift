@@ -503,4 +503,599 @@ final class QwenTests: XCTestCase {
         XCTAssertEqual(QwenProvider.frequencyModelTitle("qwen-max"), "Qwen Max")
         XCTAssertEqual(QwenProvider.frequencyModelTitle("qwen3.5-plus"), "Qwen 3.5 Plus")
     }
+
+    func testConcurrentFetchesShareSingleRefreshAndDoNotReplayRefreshToken() async throws {
+        actor GatedHTTPClient: HTTPClient {
+            private var requests: [HTTPRequest] = []
+            private var refreshWaiter: CheckedContinuation<Void, Never>?
+            private var releaseGate: CheckedContinuation<Void, Never>?
+            private var refreshEntered = false
+            private let refreshResponse: HTTPResponse
+            private let agentUsageResponse: HTTPResponse
+            private let creditsResponse: HTTPResponse
+            private let resetCardsResponse: HTTPResponse
+            private let memberLevelResponse: HTTPResponse
+
+            init(
+                refreshResponse: HTTPResponse,
+                agentUsageResponse: HTTPResponse,
+                creditsResponse: HTTPResponse,
+                resetCardsResponse: HTTPResponse,
+                memberLevelResponse: HTTPResponse
+            ) {
+                self.refreshResponse = refreshResponse
+                self.agentUsageResponse = agentUsageResponse
+                self.creditsResponse = creditsResponse
+                self.resetCardsResponse = resetCardsResponse
+                self.memberLevelResponse = memberLevelResponse
+            }
+
+            func send(_ request: HTTPRequest) async throws -> HTTPResponse {
+                requests.append(request)
+                switch request.url {
+                case QwenProvider.refreshURL:
+                    refreshEntered = true
+                    refreshWaiter?.resume()
+                    refreshWaiter = nil
+                    await withCheckedContinuation { continuation in
+                        releaseGate = continuation
+                    }
+                    return refreshResponse
+                case QwenProvider.agentUsageURL:
+                    return agentUsageResponse
+                case QwenProvider.creditsURL:
+                    return creditsResponse
+                case QwenProvider.resetCardURL:
+                    return resetCardsResponse
+                case QwenProvider.memberLevelURL:
+                    return memberLevelResponse
+                default:
+                    throw ProviderFailure(.transient, "Unexpected URL \(request.url)")
+                }
+            }
+
+            func waitForRefreshEntry() async {
+                if refreshEntered { return }
+                await withCheckedContinuation { continuation in
+                    refreshWaiter = continuation
+                }
+            }
+
+            func openGate() {
+                releaseGate?.resume()
+                releaseGate = nil
+            }
+
+            func capturedRequests() -> [HTTPRequest] {
+                requests
+            }
+        }
+
+        let files = MemoryFiles()
+        let sessionStore = QwenSessionStore(files: files, path: "/tmp/qwen-auth-concurrent.json")
+        let cred = QwenCredential(access: nil, refresh: "r1", sourceLabel: "Edge Default")
+        sessionStore.save(
+            QwenPersistedSession(
+                seedFingerprint: cred.fingerprintHex,
+                accessToken: "expired-access",
+                refreshToken: "r1",
+                expiresAt: now.addingTimeInterval(-30),
+                email: "u@example.com",
+                isForked: true
+            ),
+            for: "Edge Default"
+        )
+
+        let http = GatedHTTPClient(
+            refreshResponse: httpResponse(json: """
+            {
+              "success": true,
+              "data": {
+                "access_token": "fresh-access",
+                "refresh_token": "r2",
+                "email": "u@example.com",
+                "expires_at": \(Int(now.timeIntervalSince1970) + 900)
+              }
+            }
+            """),
+            agentUsageResponse: agentUsageOK,
+            creditsResponse: creditsOK,
+            resetCardsResponse: resetCardsOK,
+            memberLevelResponse: httpResponse(json: #"{"success":true,"data":{"memberType":"pro"}}"#)
+        )
+
+        let fixedNow = now
+        let provider = QwenProvider(
+            http: http,
+            sessionStore: sessionStore,
+            loadCredentials: { cred },
+            now: { fixedNow }
+        )
+
+        let task1 = Task { try await provider.fetch() }
+        await http.waitForRefreshEntry()
+        let task2 = Task { try await provider.fetch() }
+        try await Task.sleep(for: .milliseconds(30))
+        await http.openGate()
+
+        let snap1 = try await task1.value
+        let snap2 = try await task2.value
+        XCTAssertEqual(snap1.planName, "Pro")
+        XCTAssertEqual(snap2.planName, "Pro")
+
+        let requests = await http.capturedRequests()
+        let refreshRequests = requests.filter { $0.url == QwenProvider.refreshURL }
+        XCTAssertEqual(refreshRequests.count, 1)
+        XCTAssertEqual(refreshRequests.first?.headers["Cookie"], "refresh_token=r1")
+        XCTAssertEqual(sessionStore.load(for: "Edge Default")?.refreshToken, "r2")
+    }
+
+    func testCancelledFetchDuringRefreshStillPersistsRotatedToken() async throws {
+        actor CancellableGateHTTPClient: HTTPClient {
+            private var requests: [HTTPRequest] = []
+            private var refreshEntered = false
+            private var refreshFinished = false
+            private var entryWaiter: CheckedContinuation<Void, Never>?
+            private var releaseGate: CheckedContinuation<Void, Never>?
+            private var finishWaiter: CheckedContinuation<Void, Never>?
+            private var queued: [HTTPResponse]
+
+            init(queued: [HTTPResponse]) {
+                self.queued = queued
+            }
+
+            func send(_ request: HTTPRequest) async throws -> HTTPResponse {
+                requests.append(request)
+                if request.url == QwenProvider.refreshURL {
+                    refreshEntered = true
+                    entryWaiter?.resume()
+                    entryWaiter = nil
+                    await withCheckedContinuation { continuation in
+                        releaseGate = continuation
+                    }
+                    guard !queued.isEmpty else {
+                        refreshFinished = true
+                        finishWaiter?.resume()
+                        finishWaiter = nil
+                        throw ProviderFailure(.transient, "No mock refresh response available.")
+                    }
+                    let response = queued.removeFirst()
+                    refreshFinished = true
+                    finishWaiter?.resume()
+                    finishWaiter = nil
+                    return response
+                }
+                guard !queued.isEmpty else {
+                    throw ProviderFailure(.transient, "No mock response available.")
+                }
+                return queued.removeFirst()
+            }
+
+            func waitForRefreshEntry() async {
+                if refreshEntered { return }
+                await withCheckedContinuation { continuation in
+                    entryWaiter = continuation
+                }
+            }
+
+            func openGateAndWaitForFinish() async {
+                releaseGate?.resume()
+                releaseGate = nil
+                if !refreshFinished {
+                    await withCheckedContinuation { continuation in
+                        finishWaiter = continuation
+                    }
+                }
+            }
+
+            func capturedRequests() -> [HTTPRequest] {
+                requests
+            }
+        }
+
+        let files = MemoryFiles()
+        let sessionStore = QwenSessionStore(files: files, path: "/tmp/qwen-auth-cancel.json")
+        let cred = QwenCredential(access: nil, refresh: "r1", sourceLabel: "Edge Default")
+        sessionStore.save(
+            QwenPersistedSession(
+                seedFingerprint: cred.fingerprintHex,
+                accessToken: "expired-access",
+                refreshToken: "r1",
+                expiresAt: now.addingTimeInterval(-10),
+                email: "u@example.com",
+                isForked: true
+            ),
+            for: "Edge Default"
+        )
+
+        let http = CancellableGateHTTPClient(queued: [
+            httpResponse(json: """
+            {
+              "success": true,
+              "data": {
+                "access_token": "access-2",
+                "refresh_token": "r2",
+                "email": "u@example.com",
+                "expires_at": \(Int(now.timeIntervalSince1970) + 900)
+              }
+            }
+            """),
+            agentUsageOK, creditsOK, resetCardsOK, httpResponse(json: #"{"success":true,"data":{"memberType":"free"}}"#)
+        ])
+
+        let fixedNow = now
+        let provider = QwenProvider(
+            http: http,
+            sessionStore: sessionStore,
+            loadCredentials: { cred },
+            now: { fixedNow }
+        )
+
+        let task1 = Task { try await provider.fetch() }
+        await http.waitForRefreshEntry()
+        task1.cancel()
+        await http.openGateAndWaitForFinish()
+        _ = try? await task1.value
+
+        XCTAssertEqual(sessionStore.load(for: "Edge Default")?.refreshToken, "r2")
+        XCTAssertEqual(sessionStore.load(for: "Edge Default")?.accessToken, "access-2")
+
+        _ = try await provider.fetch()
+        let requests = await http.capturedRequests()
+        XCTAssertEqual(requests.filter { $0.url == QwenProvider.refreshURL }.count, 1)
+        XCTAssertEqual(requests.last(where: { $0.url == QwenProvider.agentUsageURL })?.headers["Authorization"], "Bearer access-2")
+    }
+
+    func testTransientAndRateLimitRefreshErrorsPreservePersistedSession() async throws {
+        final class Clock: @unchecked Sendable {
+            let lock = NSLock()
+            var now: Date
+            init(_ now: Date) { self.now = now }
+        }
+
+        let clock = Clock(now)
+        let files = MemoryFiles()
+        let sessionStore = QwenSessionStore(files: files, path: "/tmp/qwen-auth-errors.json")
+        let cred = QwenCredential(access: nil, refresh: "r1", sourceLabel: "Edge Default")
+        sessionStore.save(
+            QwenPersistedSession(
+                seedFingerprint: cred.fingerprintHex,
+                accessToken: "expired-access",
+                refreshToken: "r1",
+                expiresAt: now.addingTimeInterval(-10),
+                email: "u@example.com",
+                isForked: false
+            ),
+            for: "Edge Default"
+        )
+
+        let http = MockHTTPClient([
+            httpResponse(json: #"{"success":false,"data":{"code":"RATE_LIMITED"}}"#),
+            httpResponse(json: #"{"success":false,"data":{"code":"INTERNAL_ERROR"}}"#),
+            httpResponse(json: """
+            {
+              "success": true,
+              "data": {
+                "access_token": "access-2",
+                "refresh_token": "r2",
+                "email": "u@example.com",
+                "expires_at": \(Int(now.timeIntervalSince1970) + 400)
+              }
+            }
+            """),
+            agentUsageOK, creditsOK, resetCardsOK, httpResponse(json: #"{"success":true,"data":{"memberType":"free"}}"#),
+            httpResponse(json: #"{"success":false,"data":{"code":"Unauthorized","details":"Token is revoked, please login again."}}"#)
+        ])
+
+        let provider = QwenProvider(
+            http: http,
+            sessionStore: sessionStore,
+            loadCredentials: { cred },
+            now: { clock.lock.withLock { clock.now } }
+        )
+
+        do {
+            _ = try await provider.fetch()
+            XCTFail("Expected rateLimited failure")
+        } catch let failure as ProviderFailure {
+            XCTAssertEqual(failure.kind, .rateLimited)
+        }
+        XCTAssertEqual(sessionStore.load(for: "Edge Default")?.refreshToken, "r1")
+
+        do {
+            _ = try await provider.fetch()
+            XCTFail("Expected transient failure")
+        } catch let failure as ProviderFailure {
+            XCTAssertEqual(failure.kind, .transient)
+        }
+        XCTAssertEqual(sessionStore.load(for: "Edge Default")?.refreshToken, "r1")
+
+        _ = try await provider.fetch()
+        XCTAssertEqual(sessionStore.load(for: "Edge Default")?.refreshToken, "r2")
+
+        clock.lock.withLock { clock.now = now.addingTimeInterval(500) }
+        do {
+            _ = try await provider.fetch()
+            XCTFail("Expected authentication failure")
+        } catch let failure as ProviderFailure {
+            XCTAssertEqual(failure.kind, .authentication)
+        }
+        XCTAssertNil(sessionStore.load(for: "Edge Default"))
+    }
+
+    func testProactiveRefreshTokenRenewalViaAuthorizeCodeAndCooldown() async throws {
+        final class Clock: @unchecked Sendable {
+            let lock = NSLock()
+            var now: Date
+            init(_ now: Date) { self.now = now }
+        }
+
+        let clock = Clock(now)
+        let files = MemoryFiles()
+        let sessionStore = QwenSessionStore(files: files, path: "/tmp/qwen-auth-proactive.json")
+        let expiringRefresh = makeJWT(
+            id: "user-1",
+            type: "refresh_token",
+            iat: now.addingTimeInterval(-29.5 * 86_400),
+            exp: now.addingTimeInterval(12 * 3_600)
+        )
+        let freshRefresh = makeJWT(
+            id: "user-1",
+            type: "refresh_token",
+            iat: now,
+            exp: now.addingTimeInterval(30 * 86_400)
+        )
+        let cred = QwenCredential(access: nil, refresh: expiringRefresh, sourceLabel: "Qwen desktop")
+        sessionStore.save(
+            QwenPersistedSession(
+                seedFingerprint: cred.fingerprintHex,
+                accessToken: "valid-access",
+                refreshToken: expiringRefresh,
+                expiresAt: now.addingTimeInterval(600),
+                email: "u@example.com",
+                isForked: true,
+                refreshTokenExpiresAt: now.addingTimeInterval(12 * 3_600)
+            ),
+            for: "Qwen desktop"
+        )
+
+        let http = MockHTTPClient([
+            agentUsageOK, creditsOK, resetCardsOK, httpResponse(json: #"{"success":true,"data":{"memberType":"pro"}}"#),
+            httpResponse(json: #"{"success":true,"data":{"code":"renew-code-1"}}"#),
+            httpResponse(json: """
+            {
+              "success": true,
+              "data": {
+                "access_token": "renewed-access",
+                "refresh_token": "\(freshRefresh)",
+                "email": "u@example.com",
+                "expires_at": \(Int(now.timeIntervalSince1970) + 900)
+              }
+            }
+            """)
+        ])
+
+        let provider = QwenProvider(
+            http: http,
+            sessionStore: sessionStore,
+            loadCredentials: { cred },
+            now: { clock.lock.withLock { clock.now } }
+        )
+
+        _ = try await provider.fetch()
+        let saved = sessionStore.load(for: "Qwen desktop")
+        XCTAssertEqual(saved?.refreshToken, freshRefresh)
+        XCTAssertEqual(saved?.accessToken, "renewed-access")
+        XCTAssertEqual(saved?.isForked, true)
+
+        let requests = await http.capturedRequests()
+        XCTAssertEqual(requests.count, 6)
+        XCTAssertEqual(requests[4].url, QwenProvider.authorizeCodeURL)
+        XCTAssertEqual(requests[5].url.absoluteString, "https://auth.qwen.ai/api/v2/auths/refresh?code=renew-code-1")
+
+        // Failed proactive renewal preserves existing session and enforces 1-hour cooldown.
+        let files2 = MemoryFiles()
+        let store2 = QwenSessionStore(files: files2, path: "/tmp/qwen-auth-cooldown.json")
+        store2.save(
+            QwenPersistedSession(
+                seedFingerprint: cred.fingerprintHex,
+                accessToken: "valid-access",
+                refreshToken: expiringRefresh,
+                expiresAt: now.addingTimeInterval(900),
+                email: "u@example.com",
+                isForked: true,
+                refreshTokenExpiresAt: now.addingTimeInterval(12 * 3_600)
+            ),
+            for: "Qwen desktop"
+        )
+        let http2 = MockHTTPClient([
+            agentUsageOK, creditsOK, resetCardsOK, httpResponse(json: #"{"success":true,"data":{"memberType":"pro"}}"#),
+            httpResponse(500),
+            agentUsageOK, creditsOK, resetCardsOK, httpResponse(json: #"{"success":true,"data":{"memberType":"pro"}}"#)
+        ])
+        let provider2 = QwenProvider(
+            http: http2,
+            sessionStore: store2,
+            loadCredentials: { cred },
+            now: { clock.lock.withLock { clock.now } }
+        )
+
+        _ = try await provider2.fetch()
+        XCTAssertEqual(store2.load(for: "Qwen desktop")?.refreshToken, expiringRefresh)
+
+        clock.lock.withLock { clock.now = now.addingTimeInterval(600) }
+        _ = try await provider2.fetch()
+        let requests2 = await http2.capturedRequests()
+        XCTAssertEqual(requests2.filter { $0.url == QwenProvider.authorizeCodeURL }.count, 1)
+    }
+
+    func testRevokedForkedSessionRecoversFromUntouchedDiskCookieAndReloadedLocalAccess() async throws {
+        // Subcase A: forked session fails auth while untouched disk cookie has the same seedFingerprint.
+        let filesA = MemoryFiles()
+        let storeA = QwenSessionStore(files: filesA, path: "/tmp/qwen-auth-fork-recover.json")
+        let diskCred = QwenCredential(access: nil, refresh: "untouched-disk-cookie", sourceLabel: "Edge Default")
+        storeA.save(
+            QwenPersistedSession(
+                seedFingerprint: diskCred.fingerprintHex,
+                accessToken: "expired-forked-access",
+                refreshToken: "forked-r1",
+                expiresAt: now.addingTimeInterval(-10),
+                email: nil,
+                isForked: true
+            ),
+            for: "Edge Default"
+        )
+
+        let httpA = MockHTTPClient([
+            httpResponse(401),
+            httpResponse(json: #"{"success":true,"data":{"access_token":"recovered-access","refresh_token":"recovered-r2","expires_at":1794827823}}"#),
+            agentUsageOK, creditsOK, resetCardsOK, httpResponse(json: #"{"success":true,"data":{"memberType":"free"}}"#)
+        ])
+
+        let fixedNow = now
+        let providerA = QwenProvider(
+            http: httpA,
+            sessionStore: storeA,
+            loadCredentials: { diskCred },
+            now: { fixedNow }
+        )
+
+        let snapA = try await providerA.fetch()
+        XCTAssertEqual(snapA.planName, "Free")
+        XCTAssertEqual(storeA.load(for: "Edge Default")?.refreshToken, "recovered-r2")
+        let reqsA = await httpA.capturedRequests()
+        XCTAssertEqual(reqsA[0].headers["Cookie"], "refresh_token=forked-r1")
+        XCTAssertEqual(reqsA[1].headers["Cookie"], "refresh_token=untouched-disk-cookie")
+
+        // Subcase B: fresh LocalStorage JWT is only returned after sessionStore is cleared.
+        let filesB = MemoryFiles()
+        let storeB = QwenSessionStore(files: filesB, path: "/tmp/qwen-auth-reload-local.json")
+        let freshLocalJWT = makeJWT(id: "user-b", type: "access_token", iat: now, exp: now.addingTimeInterval(900))
+        let oldCred = QwenCredential(access: nil, refresh: "old-cookie", sourceLabel: "Edge Default")
+        storeB.save(
+            QwenPersistedSession(
+                seedFingerprint: oldCred.fingerprintHex,
+                accessToken: "stale-access",
+                refreshToken: "revoked-r1",
+                expiresAt: now.addingTimeInterval(-10),
+                email: "reload@example.com",
+                isForked: false
+            ),
+            for: "Edge Default"
+        )
+
+        let httpB = MockHTTPClient([
+            httpResponse(401),
+            agentUsageOK, creditsOK, resetCardsOK, httpResponse(json: #"{"success":true,"data":{"memberType":"plus"}}"#),
+            httpResponse(json: #"{"success":true,"data":{"email":"reload@example.com"}}"#),
+            httpResponse(json: #"{"success":true,"data":{"code":"fork-code-b"}}"#),
+            httpResponse(json: #"{"success":true,"data":{"access_token":"forked-b","refresh_token":"forked-refresh-b","expires_at":1794828000}}"#)
+        ])
+
+        let providerB = QwenProvider(
+            http: httpB,
+            sessionStore: storeB,
+            loadCredentials: {
+                let localAccess = storeB.load(for: "Edge Default") == nil ? freshLocalJWT : nil
+                return QwenCredential(access: localAccess, refresh: "untouched-browser-cookie", sourceLabel: "Edge Default")
+            },
+            now: { fixedNow }
+        )
+
+        let snapB = try await providerB.fetch()
+        XCTAssertEqual(snapB.planName, "Plus")
+        XCTAssertEqual(storeB.load(for: "Edge Default")?.refreshToken, "forked-refresh-b")
+        let reqsB = await httpB.capturedRequests()
+        XCTAssertFalse(reqsB.contains { $0.headers.values.contains { $0.contains("untouched-browser-cookie") } })
+    }
+
+    func testAccountSwitchInSourceJWTInvalidatesPersistedSession() async throws {
+        let files = MemoryFiles()
+        let sessionStore = QwenSessionStore(files: files, path: "/tmp/qwen-auth-switch.json")
+        let userAAccess = makeJWT(id: "user-a", type: "access_token", iat: now, exp: now.addingTimeInterval(600))
+        let userBRefresh = makeJWT(id: "user-b", type: "refresh_token", iat: now, exp: now.addingTimeInterval(86_400))
+        let userBAccess = makeJWT(id: "user-b", type: "access_token", iat: now, exp: now.addingTimeInterval(900))
+        let userBNextRefresh = makeJWT(id: "user-b", type: "refresh_token", iat: now, exp: now.addingTimeInterval(86_400))
+
+        sessionStore.save(
+            QwenPersistedSession(
+                seedFingerprint: "seed-a",
+                accessToken: userAAccess,
+                refreshToken: "refresh-a",
+                expiresAt: now.addingTimeInterval(600),
+                email: "a@example.com",
+                isForked: true
+            ),
+            for: "Qwen desktop"
+        )
+
+        let http = MockHTTPClient([
+            httpResponse(json: """
+            {
+              "success": true,
+              "data": {
+                "access_token": "\(userBAccess)",
+                "refresh_token": "\(userBNextRefresh)",
+                "email": "b@example.com",
+                "expires_at": \(Int(now.timeIntervalSince1970) + 900)
+              }
+            }
+            """),
+            agentUsageOK, creditsOK, resetCardsOK, httpResponse(json: #"{"success":true,"data":{"memberType":"pro"}}"#)
+        ])
+
+        let fixedNow = now
+        let provider = QwenProvider(
+            http: http,
+            sessionStore: sessionStore,
+            loadCredentials: {
+                QwenCredential(access: nil, refresh: userBRefresh, sourceLabel: "Qwen desktop")
+            },
+            now: { fixedNow }
+        )
+
+        let snapshot = try await provider.fetch()
+        XCTAssertEqual(snapshot.identityEmail, "b@example.com")
+        XCTAssertEqual(sessionStore.load(for: "Qwen desktop")?.accessToken, userBAccess)
+        XCTAssertEqual(sessionStore.load(for: "Qwen desktop")?.refreshToken, userBNextRefresh)
+        let requests = await http.capturedRequests()
+        XCTAssertEqual(requests[0].headers["Cookie"], "refresh_token=\(userBRefresh)")
+    }
+
+    func testExtractRefreshTokenCookieSkipsDeletedAndMaxAgeZero() {
+        let withDeletedThenValid = HTTPResponse(
+            statusCode: 200,
+            headers: [
+                "Set-Cookie": "refresh_token=deleted; Path=/; Max-Age=0, acw_tc=abc, refresh_token=valid-jwt-token; Path=/; HttpOnly"
+            ],
+            body: Data()
+        )
+        XCTAssertEqual(QwenProvider.extractRefreshTokenCookie(from: withDeletedThenValid), "valid-jwt-token")
+
+        let deletedOnly = HTTPResponse(
+            statusCode: 200,
+            headers: ["Set-Cookie": "refresh_token=deleted; Max-Age=0"],
+            body: Data()
+        )
+        XCTAssertNil(QwenProvider.extractRefreshTokenCookie(from: deletedOnly))
+
+        let maxAgeZeroOnly = HTTPResponse(
+            statusCode: 200,
+            headers: ["Set-Cookie": "refresh_token=stale-token; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Max-Age=0"],
+            body: Data()
+        )
+        XCTAssertNil(QwenProvider.extractRefreshTokenCookie(from: maxAgeZeroOnly))
+    }
+
+    private func makeJWT(id: String, type: String, iat: Date, exp: Date) -> String {
+        func b64(_ data: Data) -> String {
+            data.base64EncodedString()
+                .replacingOccurrences(of: "+", with: "-")
+                .replacingOccurrences(of: "/", with: "_")
+                .replacingOccurrences(of: "=", with: "")
+        }
+        let header = b64(Data(#"{"alg":"HS256","typ":"JWT"}"#.utf8))
+        let payload = b64(Data("{\"id\":\"\(id)\",\"type\":\"\(type)\",\"iat\":\(Int(iat.timeIntervalSince1970)),\"exp\":\(Int(exp.timeIntervalSince1970))}".utf8))
+        return "\(header).\(payload).sig"
+    }
 }
