@@ -56,10 +56,26 @@ extension ProviderSnapshot {
     func mergingMediaCredits(_ media: GoogleFlowCreditsResult) -> Self {
         guard !media.isEmpty else { return self }
         var updatedWindows = windows
+        if let notebookSession = media.notebookLMSession,
+           !updatedWindows.contains(where: { $0.kind.rawValue == "additional:gemini.notebooklm.session" }) {
+            updatedWindows.append(GoogleFlowCredits.percentWindow(
+                id: "gemini.notebooklm.session",
+                title: "NotebookLM Session",
+                reading: notebookSession
+            ))
+        }
+        if let notebookWeekly = media.notebookLMWeekly,
+           !updatedWindows.contains(where: { $0.kind.rawValue == "additional:gemini.notebooklm.weekly" }) {
+            updatedWindows.append(GoogleFlowCredits.percentWindow(
+                id: "gemini.notebooklm.weekly",
+                title: "NotebookLM Weekly",
+                reading: notebookWeekly
+            ))
+        }
         if let flow = media.flow, !updatedWindows.contains(where: { $0.kind.rawValue == "additional:gemini.flow" }) {
             updatedWindows.append(GoogleFlowCredits.window(
                 id: "gemini.flow",
-                title: "Flow Credits",
+                title: "Flow Video Monthly",
                 reading: flow,
                 allotment: GoogleFlowCredits.flowAllotment(forPlan: planName)
             ))
@@ -67,9 +83,16 @@ extension ProviderSnapshot {
         if let music = media.music, !updatedWindows.contains(where: { $0.kind.rawValue == "additional:gemini.flowmusic" }) {
             updatedWindows.append(GoogleFlowCredits.window(
                 id: "gemini.flowmusic",
-                title: "Flow Music",
+                title: "Flow Music Monthly",
                 reading: music,
                 allotment: GoogleFlowCredits.flowMusicAllotment(forPlan: planName)
+            ))
+        }
+        if let stitch = media.stitch, !updatedWindows.contains(where: { $0.kind.rawValue == "additional:gemini.stitch" }) {
+            updatedWindows.append(GoogleFlowCredits.stitchWindow(
+                id: "gemini.stitch",
+                title: "Stitch Daily",
+                reading: stitch
             ))
         }
         let mergedWarnings = ResponseSchemaWatch.deduplicated(diagnosticWarnings + media.diagnosticWarnings)
