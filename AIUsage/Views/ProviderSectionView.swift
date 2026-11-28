@@ -10,6 +10,7 @@ struct ProviderSectionView: View {
     let expandedOverride: Bool?
     let part: ProviderSectionPart
     let onToggle: (() -> Void)?
+    let onReload: (() -> Void)?
     @State private var isExpanded = false
     private var showsDetails: Bool { expandedOverride ?? isExpanded }
 
@@ -19,7 +20,8 @@ struct ProviderSectionView: View {
         embedded: Bool = false,
         expandedOverride: Bool? = nil,
         part: ProviderSectionPart = .all,
-        onToggle: (() -> Void)? = nil
+        onToggle: (() -> Void)? = nil,
+        onReload: (() -> Void)? = nil
     ) {
         self.state = state
         self.displayMode = displayMode
@@ -27,6 +29,7 @@ struct ProviderSectionView: View {
         self.expandedOverride = expandedOverride
         self.part = part
         self.onToggle = onToggle
+        self.onReload = onReload
     }
 
     var body: some View {
@@ -168,16 +171,6 @@ struct ProviderSectionView: View {
                     systemImage: "chart.bar.xaxis"
                 )
             }
-
-            if part != .details, state.isStale, let failure = state.failure {
-                Label(failure.message, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption2)
-                    .foregroundStyle(UsagePalette.warning)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .help(failure.message)
-                    .padding(.horizontal, 13)
-                    .padding(.bottom, 9)
-            }
         }
     }
 
@@ -220,10 +213,15 @@ struct ProviderSectionView: View {
 
             let _ = ConfirmedSchemaObserver.shared.revision
             let activeWarnings = state.snapshot.map { ConfirmedSchemaStore.shared.activeWarnings(for: $0) } ?? []
-            if !embedded, !activeWarnings.isEmpty {
-                DiagnosticWarningBadge(
-                    providerName: state.snapshot?.displayName ?? state.provider.displayName,
-                    warnings: activeWarnings,
+            if !embedded, let warningPresentation = ProviderWarningPresentation.make(
+                state: state,
+                activeWarnings: activeWarnings,
+                canReload: onReload != nil
+            ) {
+                ProviderWarningBadge(
+                    presentation: warningPresentation,
+                    isRefreshing: state.isRefreshing,
+                    onReload: onReload,
                     onUpdate: {
                         ConfirmedSchemaStore.shared.confirm(warnings: activeWarnings, for: state.provider)
                         ConfirmedSchemaObserver.shared.notifyChanged()
@@ -1442,23 +1440,163 @@ private struct ProviderDisclosureTitle: View {
     }
 }
 
-private struct DiagnosticWarningBadge: View {
-    let providerName: String
-    let warnings: [ProviderDiagnosticWarning]
-    let onUpdate: () -> Void
+struct ProviderWarningPresentation: Equatable {
+    enum Entry: Equatable, Identifiable {
+        case staleFailure(ProviderFailure)
+        case diagnostic(ProviderDiagnosticWarning)
 
-    @State private var showingPopover = false
+        var id: String {
+            switch self {
+            case let .staleFailure(failure):
+                "stale.\(failure.kind.rawValue).\(failure.message)"
+            case let .diagnostic(warning):
+                "diagnostic.\(warning.id)"
+            }
+        }
 
-    private var tooltipSummary: String {
-        warnings.map { warning in
-            guard !warning.detail.isEmpty else { return warning.summary }
-            let preview = warning.detail.replacingOccurrences(of: "\n", with: ", ")
-            return "\(warning.summary) — \(preview)"
-        }.joined(separator: "\n") + "\nClick for details or to update confirmed config."
+        var isStaleFailure: Bool {
+            if case .staleFailure = self { return true }
+            return false
+        }
+
+        var categoryTitle: String {
+            switch self {
+            case let .staleFailure(failure):
+                failure.kind == .rateLimited
+                    ? "Rate limited · Showing last update"
+                    : "Showing last update"
+            case let .diagnostic(warning):
+                warning.kind.badgeTitle
+            }
+        }
+
+        var summary: String {
+            switch self {
+            case let .staleFailure(failure):
+                failure.message
+            case let .diagnostic(warning):
+                warning.summary
+            }
+        }
+
+        var detail: String? {
+            switch self {
+            case .staleFailure:
+                nil
+            case let .diagnostic(warning):
+                warning.detail.isEmpty ? nil : warning.detail
+            }
+        }
+
+        var retryAt: Date? {
+            switch self {
+            case let .staleFailure(failure):
+                failure.retryAt
+            case .diagnostic:
+                nil
+            }
+        }
     }
 
-    private var needsScroll: Bool {
-        warnings.count > 3 || warnings.reduce(0) { $0 + $1.detail.split(separator: "\n").count + 2 } > 10
+    let providerName: String
+    let entries: [Entry]
+    let hasStaleFailure: Bool
+    let hasDiagnosticWarnings: Bool
+    let popoverTitle: String
+    let accessibilityLabel: String
+    let accessibilityValue: String
+    let tooltipSummary: String
+    let needsScroll: Bool
+
+    var dividerCount: Int { max(entries.count - 1, 0) }
+
+    static func make(
+        state: ProviderState,
+        activeWarnings: [ProviderDiagnosticWarning],
+        canReload: Bool
+    ) -> ProviderWarningPresentation? {
+        let staleFailure = state.snapshot?.hasPanelContent == true ? state.failure : nil
+        var entries: [Entry] = []
+        if let staleFailure {
+            entries.append(.staleFailure(staleFailure))
+        }
+        entries.append(contentsOf: activeWarnings.map(Entry.diagnostic))
+        guard !entries.isEmpty else { return nil }
+
+        let providerName = state.snapshot?.displayName ?? state.provider.displayName
+        let hasStaleFailure = staleFailure != nil
+        let hasDiagnosticWarnings = !activeWarnings.isEmpty
+
+        let popoverTitle: String
+        if hasStaleFailure && hasDiagnosticWarnings {
+            popoverTitle = "\(providerName) Warnings"
+        } else if hasStaleFailure {
+            popoverTitle = "\(providerName) Warning"
+        } else {
+            popoverTitle = "\(providerName) API Notice"
+        }
+
+        let accessibilityLabel: String
+        if hasStaleFailure && !hasDiagnosticWarnings {
+            accessibilityLabel = "\(providerName) warning"
+        } else if !hasStaleFailure && hasDiagnosticWarnings {
+            accessibilityLabel = "\(providerName) API warning"
+        } else {
+            accessibilityLabel = "\(providerName) warnings"
+        }
+
+        let accessibilityValue = entries.map(\.summary).joined(separator: "; ")
+
+        let entryLines = entries.map { entry in
+            switch entry {
+            case let .staleFailure(failure):
+                return "\(entry.categoryTitle) — \(failure.message)"
+            case let .diagnostic(warning):
+                guard !warning.detail.isEmpty else { return warning.summary }
+                let preview = warning.detail.replacingOccurrences(of: "\n", with: ", ")
+                return "\(warning.summary) — \(preview)"
+            }
+        }
+        let actionHint: String
+        if canReload && hasDiagnosticWarnings {
+            actionHint = "Click for details, to reload, or to update confirmed config."
+        } else if canReload {
+            actionHint = "Click for details or to reload."
+        } else if hasDiagnosticWarnings {
+            actionHint = "Click for details or to update confirmed config."
+        } else {
+            actionHint = "Click for details."
+        }
+        let tooltipSummary = (entryLines + [actionHint]).joined(separator: "\n")
+
+        let needsScroll = entries.count > 3
+            || entries.reduce(0) { $0 + ($1.detail?.split(separator: "\n").count ?? 0) + 2 } > 10
+
+        return ProviderWarningPresentation(
+            providerName: providerName,
+            entries: entries,
+            hasStaleFailure: hasStaleFailure,
+            hasDiagnosticWarnings: hasDiagnosticWarnings,
+            popoverTitle: popoverTitle,
+            accessibilityLabel: accessibilityLabel,
+            accessibilityValue: accessibilityValue,
+            tooltipSummary: tooltipSummary,
+            needsScroll: needsScroll
+        )
+    }
+}
+
+private struct ProviderWarningBadge: View {
+    let presentation: ProviderWarningPresentation
+    let isRefreshing: Bool
+    let onReload: (() -> Void)?
+    let onUpdate: () -> Void
+
+    @Environment(\.usagePanelVisible) private var isPanelVisible
+    @State private var showingPopover = false
+
+    private var badgeTint: Color {
+        presentation.hasStaleFailure ? UsagePalette.warning : Color(nsColor: .systemYellow)
     }
 
     var body: some View {
@@ -1467,20 +1605,25 @@ private struct DiagnosticWarningBadge: View {
         } label: {
             Image(systemName: "exclamationmark.triangle.fill")
                 .font(.system(size: 11.5, weight: .semibold))
-                .foregroundStyle(Color(nsColor: .systemYellow))
+                .foregroundStyle(badgeTint)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(tooltipSummary)
-        .accessibilityLabel("\(providerName) API warning")
-        .accessibilityValue(warnings.map(\.summary).joined(separator: "; "))
+        .help(presentation.tooltipSummary)
+        .accessibilityLabel(presentation.accessibilityLabel)
+        .accessibilityValue(presentation.accessibilityValue)
+        .onChange(of: isPanelVisible) { _, visible in
+            if !visible {
+                showingPopover = false
+            }
+        }
         .popover(isPresented: $showingPopover, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 8) {
-                Label("\(providerName) API Notice", systemImage: "exclamationmark.triangle.fill")
+                Label(presentation.popoverTitle, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(Color(nsColor: .systemYellow))
+                    .foregroundStyle(badgeTint)
 
-                if needsScroll {
+                if presentation.needsScroll {
                     ScrollView {
                         warningsList
                     }
@@ -1489,20 +1632,29 @@ private struct DiagnosticWarningBadge: View {
                     warningsList
                 }
 
-                Divider()
+                if onReload != nil || presentation.hasDiagnosticWarnings {
+                    Divider()
 
-                HStack(spacing: 8) {
-                    Text("Accept current API structure?")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 8)
-                    Button("Update") {
-                        onUpdate()
-                        showingPopover = false
+                    HStack(spacing: 8) {
+                        Text(footerCaption)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 8)
+                        if let onReload {
+                            reloadButton(action: onReload)
+                        }
+                        if presentation.hasDiagnosticWarnings {
+                            Button("Update") {
+                                onUpdate()
+                                if !presentation.hasStaleFailure {
+                                    showingPopover = false
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                            .help("Save these API changes into \(presentation.providerName)'s confirmed config until the next change.")
+                        }
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .help("Save these API changes into \(providerName)'s confirmed config until the next change.")
                 }
             }
             .padding(12)
@@ -1510,26 +1662,70 @@ private struct DiagnosticWarningBadge: View {
         }
     }
 
+    private var footerCaption: String {
+        if presentation.hasDiagnosticWarnings {
+            return "Accept current API structure?"
+        }
+        return isRefreshing ? "Reloading \(presentation.providerName)…" : "Showing last saved data."
+    }
+
+    @ViewBuilder
+    private func reloadButton(action: @escaping () -> Void) -> some View {
+        let label = HStack(spacing: 4) {
+            ZStack {
+                if isRefreshing && isPanelVisible {
+                    ProgressView()
+                        .controlSize(.mini)
+                } else {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 10.5, weight: .semibold))
+                }
+            }
+            .frame(width: 12, height: 12)
+            Text("Reload")
+        }
+        Group {
+            if presentation.hasDiagnosticWarnings {
+                Button(action: action) { label }
+                    .buttonStyle(.bordered)
+            } else {
+                Button(action: action) { label }
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+        .controlSize(.small)
+        .disabled(isRefreshing)
+        .help(isRefreshing ? "Reloading \(presentation.providerName)" : "Reload \(presentation.providerName) usage")
+    }
+
     private var warningsList: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(warnings) { warning in
+            ForEach(Array(presentation.entries.enumerated()), id: \.element.id) { index, entry in
+                if index > 0 {
+                    Divider()
+                }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(warning.kind.badgeTitle)
+                    Text(entry.categoryTitle)
                         .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    Text(warning.summary)
+                        .foregroundStyle(entry.isStaleFailure ? UsagePalette.warning : .secondary)
+                    Text(entry.summary)
                         .font(.caption.weight(.medium))
                         .fixedSize(horizontal: false, vertical: true)
-                    if !warning.detail.isEmpty {
-                        Text(warning.detail)
+                    if let retryAt = entry.retryAt {
+                        HStack(spacing: 3) {
+                            Text("Retry")
+                            Text(retryAt, style: .relative)
+                        }
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    }
+                    if let detail = entry.detail {
+                        Text(detail)
                             .font(.caption2.monospaced())
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                             .textSelection(.enabled)
                     }
-                }
-                if warning.id != warnings.last?.id {
-                    Divider()
                 }
             }
         }

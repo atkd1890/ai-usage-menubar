@@ -332,6 +332,7 @@ final class MenuBarController: NSObject, NSWindowDelegate {
     private let updateController: UpdateController
     private let statusBar: NSStatusBar
     private let application: any ApplicationActivating
+    private let statusItemAutosaveName: NSStatusItem.AutosaveName
 
     private var statusItem: NSStatusItem?
     private(set) var usagePanel: UsagePanel?
@@ -365,7 +366,8 @@ final class MenuBarController: NSObject, NSWindowDelegate {
         launchAtLogin: LaunchAtLoginController,
         updateController: UpdateController,
         statusBar: NSStatusBar = .system,
-        application: any ApplicationActivating = NSApplication.shared
+        application: any ApplicationActivating = NSApplication.shared,
+        statusItemAutosaveName: NSStatusItem.AutosaveName = MenuBarController.statusItemAutosaveName
     ) {
         self.store = store
         self.preferences = preferences
@@ -373,6 +375,7 @@ final class MenuBarController: NSObject, NSWindowDelegate {
         self.updateController = updateController
         self.statusBar = statusBar
         self.application = application
+        self.statusItemAutosaveName = statusItemAutosaveName
         super.init()
     }
 
@@ -382,7 +385,7 @@ final class MenuBarController: NSObject, NSWindowDelegate {
 
         if statusItem == nil {
             let item = statusBar.statusItem(withLength: NSStatusItem.variableLength)
-            item.autosaveName = Self.statusItemAutosaveName
+            item.autosaveName = statusItemAutosaveName
             statusItem = item
         }
         if let button = statusItem?.button {
@@ -961,7 +964,8 @@ struct NativeProviderContent: View {
         Group {
             if let state = store.states[provider] {
                 ProviderSectionView(state: state, displayMode: preferences.usageDisplayMode,
-                                    expandedOverride: part == .details ? true : expanded, part: part, onToggle: toggle)
+                                    expandedOverride: part == .details ? true : expanded, part: part, onToggle: toggle,
+                                    onReload: { store.refreshProvider(provider) })
             }
         }
         .environment(\.usagePanelVisible, presentation.isVisible && (part != .details || expanded))

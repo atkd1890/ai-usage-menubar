@@ -251,7 +251,8 @@ struct DashboardContentView: View {
                 if let state = store.states[provider] {
                     ProviderSectionView(
                         state: state,
-                        displayMode: usageDisplayMode
+                        displayMode: usageDisplayMode,
+                        onReload: { store.refreshProvider(provider) }
                     )
                 }
             }

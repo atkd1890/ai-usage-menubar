@@ -608,6 +608,94 @@ final class UsageStoreTests: XCTestCase {
         XCTAssertEqual(readings.map(\.isAtRisk), [true, false])
     }
 
+    func testRefreshProviderReloadsOnlyTargetProviderAndClearsStaleFailure() async {
+        let firstBuddy = snapshot(provider: .buddy, session: 30, weekly: 50)
+        let refreshedBuddy = snapshot(provider: .buddy, session: 45, weekly: 60)
+        let buddy = SequencedProvider(
+            id: .buddy,
+            results: [
+                .success(firstBuddy),
+                .failure(ProviderFailure(.transient, "Buddy could not be reached.")),
+                .success(refreshedBuddy)
+            ]
+        )
+        let claude = CountingProvider(
+            id: .claude,
+            result: .success(snapshot(provider: .claude, session: 20, weekly: 35))
+        )
+        let store = UsageStore(
+            providers: [buddy, claude],
+            availabilityChecker: FixedProviderAvailabilityChecker(installed: [.buddy, .claude]),
+            trackedProviderIDs: [.buddy, .claude]
+        )
+
+        await store.refresh()
+        await store.refresh()
+        XCTAssertTrue(store.states[.buddy]?.isStale == true)
+        let claudeCallsBeforeReload = await claude.fetchCallCount()
+        XCTAssertEqual(claudeCallsBeforeReload, 2)
+
+        await store.refresh(provider: .buddy)
+
+        let claudeCallsAfterReload = await claude.fetchCallCount()
+        XCTAssertEqual(claudeCallsAfterReload, 2)
+        XCTAssertFalse(store.states[.buddy]?.isStale == true)
+        XCTAssertNil(store.states[.buddy]?.failure)
+        XCTAssertEqual(store.states[.buddy]?.snapshot, refreshedBuddy)
+    }
+
+    func testRefreshProviderRunsWhileOtherProviderBatchRefreshIsInFlight() async {
+        let initialBuddy = snapshot(provider: .buddy, session: 15, weekly: 25)
+        let reloadedBuddy = snapshot(provider: .buddy, session: 55, weekly: 65)
+        let buddy = SequencedProvider(
+            id: .buddy,
+            results: [
+                .success(initialBuddy),
+                .failure(ProviderFailure(.transient, "Buddy could not be reached.")),
+                .success(reloadedBuddy)
+            ]
+        )
+        let claudeGate = BlockingProvider(
+            id: .claude,
+            snapshot: snapshot(provider: .claude, session: 10, weekly: 20)
+        )
+        let store = UsageStore(
+            providers: [buddy, claudeGate],
+            availabilityChecker: FixedProviderAvailabilityChecker(installed: [.buddy, .claude]),
+            trackedProviderIDs: [.buddy, .claude]
+        )
+
+        await store.refresh()
+        XCTAssertEqual(store.states[.buddy]?.snapshot, initialBuddy)
+
+        await claudeGate.setBlocking(true)
+        let batchTask = Task { await store.refresh() }
+        await claudeGate.waitUntilStarted()
+        // Wait until buddy's batch fetch (2nd result: failure) has completed while claude is still blocking.
+        while store.states[.buddy]?.failure == nil {
+            await Task.yield()
+        }
+
+        XCTAssertTrue(store.states[.claude]?.isRefreshing == true)
+        XCTAssertFalse(store.states[.buddy]?.isRefreshing == true)
+        XCTAssertTrue(store.states[.buddy]?.isStale == true)
+
+        await store.refresh(provider: .buddy)
+
+        XCTAssertNil(store.states[.buddy]?.failure)
+        XCTAssertEqual(store.states[.buddy]?.snapshot, reloadedBuddy)
+        XCTAssertTrue(store.states[.claude]?.isRefreshing == true)
+
+        // Attempting a single-provider reload for claude while claude is already refreshing must not double-fetch.
+        await store.refresh(provider: .claude)
+        let claudeStartedCount = await claudeGate.fetchCallCount()
+        XCTAssertEqual(claudeStartedCount, 2)
+
+        await claudeGate.release()
+        await batchTask.value
+        XCTAssertFalse(store.states[.claude]?.isRefreshing == true)
+    }
+
     private func snapshot(
         provider: ProviderID,
         session: Double,
@@ -651,5 +739,49 @@ private actor PermissionWaitingProvider: UsageProvider {
         released = true
         continuation?.resume(returning: snapshot)
         continuation = nil
+    }
+}
+
+private actor BlockingProvider: UsageProvider {
+    nonisolated let id: ProviderID
+    let snapshot: ProviderSnapshot
+    private var blocking = false
+    private var started = false
+    private var callCount = 0
+    private var startContinuation: CheckedContinuation<Void, Never>?
+    private var fetchContinuation: CheckedContinuation<ProviderSnapshot, Never>?
+
+    init(id: ProviderID, snapshot: ProviderSnapshot) {
+        self.id = id
+        self.snapshot = snapshot
+    }
+
+    func setBlocking(_ value: Bool) {
+        blocking = value
+        started = false
+    }
+
+    func waitUntilStarted() async {
+        if started { return }
+        await withCheckedContinuation { startContinuation = $0 }
+    }
+
+    func fetchCallCount() -> Int {
+        callCount
+    }
+
+    func fetch() async throws -> ProviderSnapshot {
+        callCount += 1
+        started = true
+        startContinuation?.resume()
+        startContinuation = nil
+        guard blocking else { return snapshot }
+        return await withCheckedContinuation { fetchContinuation = $0 }
+    }
+
+    func release() {
+        blocking = false
+        fetchContinuation?.resume(returning: snapshot)
+        fetchContinuation = nil
     }
 }

@@ -347,6 +347,119 @@ final class VisualSnapshotTests: XCTestCase {
         XCTAssertTrue(loggedOut.isVisibleInDashboard)
     }
 
+    func testStaleProviderWarningMovesIntoHeaderBadgeWithoutExpandingCardHeight() {
+        let snapshot = ProviderSnapshot(
+            provider: .buddy,
+            planName: "Pro",
+            windows: [
+                QuotaWindow(kind: .monthly, usedPercent: 40, resetsAt: nil)
+            ],
+            fetchedAt: Date()
+        )
+        let freshState = ProviderState(provider: .buddy, snapshot: snapshot)
+        let staleState = ProviderState(
+            provider: .buddy,
+            snapshot: snapshot,
+            failure: ProviderFailure(.transient, "Buddy could not be reached.")
+        )
+
+        let freshSize = measuredSize(of: ProviderSectionView(state: freshState), width: panelWidth - 20)
+        let staleSize = measuredSize(of: ProviderSectionView(state: staleState), width: panelWidth - 20)
+        XCTAssertEqual(staleSize.height, freshSize.height, accuracy: 0.5)
+
+        let presentation = ProviderWarningPresentation.make(
+            state: staleState,
+            activeWarnings: [],
+            canReload: true
+        )
+        XCTAssertEqual(presentation?.entries.count, 1)
+        XCTAssertEqual(presentation?.dividerCount, 0)
+        XCTAssertEqual(presentation?.popoverTitle, "Buddy Warning")
+        XCTAssertEqual(presentation?.accessibilityLabel, "Buddy warning")
+        XCTAssertEqual(presentation?.accessibilityValue, "Buddy could not be reached.")
+        XCTAssertTrue(presentation?.hasStaleFailure == true)
+        XCTAssertFalse(presentation?.hasDiagnosticWarnings == true)
+        XCTAssertTrue(presentation?.tooltipSummary.contains("Showing last update — Buddy could not be reached.") == true)
+        XCTAssertTrue(presentation?.tooltipSummary.contains("Click for details or to reload.") == true)
+    }
+
+    func testNoDataFailureRemainsInlinePlaceholderInsteadOfHeaderBadge() {
+        let noSnapshotState = ProviderState(
+            provider: .buddy,
+            failure: ProviderFailure(.transient, "Buddy could not be reached.")
+        )
+        let emptySnapshotState = ProviderState(
+            provider: .buddy,
+            snapshot: ProviderSnapshot(provider: .buddy, planName: nil, windows: [], fetchedAt: Date()),
+            failure: ProviderFailure(.transient, "Buddy could not be reached.")
+        )
+
+        XCTAssertNil(ProviderWarningPresentation.make(state: noSnapshotState, activeWarnings: [], canReload: true))
+        XCTAssertNil(ProviderWarningPresentation.make(state: emptySnapshotState, activeWarnings: [], canReload: true))
+
+        let size = measuredSize(of: ProviderSectionView(state: noSnapshotState), width: panelWidth - 20)
+        XCTAssertGreaterThan(size.height, 55)
+        XCTAssertLessThan(size.height, 120)
+    }
+
+    func testMultipleWarningsOrderStaleFailureAndDiagnosticsWithDividers() {
+        let retryAt = Date().addingTimeInterval(300)
+        let snapshot = ProviderSnapshot(
+            provider: .buddy,
+            planName: "Pro",
+            windows: [
+                QuotaWindow(kind: .monthly, usedPercent: 40, resetsAt: nil)
+            ],
+            fetchedAt: Date()
+        )
+        let staleState = ProviderState(
+            provider: .buddy,
+            snapshot: snapshot,
+            failure: ProviderFailure(.rateLimited, "Buddy usage is rate limited.", retryAt: retryAt)
+        )
+        let diagnostics = [
+            ProviderDiagnosticWarning(
+                id: "schema.added.test",
+                kind: .schemaAdded,
+                summary: "New field in Buddy",
+                detail: "bonus_pool: 100"
+            ),
+            ProviderDiagnosticWarning(
+                id: "api.deprecated.test",
+                kind: .apiDeprecated,
+                summary: "API deprecation notice",
+                detail: "Sunset: 2027-01-01"
+            )
+        ]
+
+        let combined = ProviderWarningPresentation.make(
+            state: staleState,
+            activeWarnings: diagnostics,
+            canReload: true
+        )
+        XCTAssertEqual(combined?.entries.count, 3)
+        XCTAssertEqual(combined?.dividerCount, 2)
+        XCTAssertEqual(combined?.popoverTitle, "Buddy Warnings")
+        XCTAssertEqual(combined?.accessibilityLabel, "Buddy warnings")
+        XCTAssertEqual(combined?.entries.first?.isStaleFailure, true)
+        XCTAssertEqual(combined?.entries.first?.retryAt, retryAt)
+        XCTAssertEqual(
+            combined?.entries.map(\.summary),
+            ["Buddy usage is rate limited.", "New field in Buddy", "API deprecation notice"]
+        )
+        XCTAssertTrue(combined?.tooltipSummary.contains("Click for details, to reload, or to update confirmed config.") == true)
+
+        let diagnosticOnly = ProviderWarningPresentation.make(
+            state: ProviderState(provider: .buddy, snapshot: snapshot),
+            activeWarnings: diagnostics,
+            canReload: true
+        )
+        XCTAssertEqual(diagnosticOnly?.entries.count, 2)
+        XCTAssertEqual(diagnosticOnly?.dividerCount, 1)
+        XCTAssertEqual(diagnosticOnly?.popoverTitle, "Buddy API Notice")
+        XCTAssertEqual(diagnosticOnly?.accessibilityLabel, "Buddy API warning")
+    }
+
     private func makePopulatedStore() async -> UsageStore {
         let now = Date()
         let claude = SequencedProvider(

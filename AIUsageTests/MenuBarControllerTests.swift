@@ -4,6 +4,8 @@ import SwiftUI
 
 @MainActor
 final class MenuBarControllerTests: XCTestCase {
+    private static let testStatusItemAutosaveName: NSStatusItem.AutosaveName = "com.burakgon.aiusage.test-host.statusItem"
+
     func testNativeDisclosureKeepsSummaryAnchoredThroughoutAnimation() async throws {
         let window = NSWindow(contentRect: NSRect(x: -10000, y: 0, width: 440, height: 600),
                               styleMask: [.borderless], backing: .buffered, defer: false)
@@ -157,7 +159,8 @@ final class MenuBarControllerTests: XCTestCase {
                 service: MenuBarControllerLoginService()
             ),
             updateController: UpdateController(startingUpdater: false),
-            application: application
+            application: application,
+            statusItemAutosaveName: Self.testStatusItemAutosaveName
         )
 
         controller.start()
@@ -194,7 +197,8 @@ final class MenuBarControllerTests: XCTestCase {
             store: UsageStore(providers: [], availabilityChecker: FixedProviderAvailabilityChecker(installed: [])),
             preferences: AppPreferences(defaults: defaults),
             launchAtLogin: LaunchAtLoginController(service: MenuBarControllerLoginService()),
-            updateController: UpdateController(startingUpdater: false), application: RecordingApplicationActivator())
+            updateController: UpdateController(startingUpdater: false), application: RecordingApplicationActivator(),
+            statusItemAutosaveName: Self.testStatusItemAutosaveName)
         controller.start()
         controller.togglePanel(nil)
         let panel = controller.usagePanel
@@ -266,7 +270,8 @@ final class MenuBarControllerTests: XCTestCase {
         preferences.setMenuBarVisibility(true, for: .claude, availableItems: snapshot.availableMenuBarItems)
         let controller = MenuBarController(store: store, preferences: preferences,
             launchAtLogin: LaunchAtLoginController(service: MenuBarControllerLoginService()),
-            updateController: UpdateController(startingUpdater: false), application: RecordingApplicationActivator())
+            updateController: UpdateController(startingUpdater: false), application: RecordingApplicationActivator(),
+            statusItemAutosaveName: Self.testStatusItemAutosaveName)
         controller.start()
         defer { controller.stop() }
         try await Task.sleep(for: .milliseconds(200))
@@ -286,7 +291,8 @@ final class MenuBarControllerTests: XCTestCase {
             store: UsageStore(providers: [], availabilityChecker: FixedProviderAvailabilityChecker(installed: [])),
             preferences: AppPreferences(defaults: defaults),
             launchAtLogin: LaunchAtLoginController(service: MenuBarControllerLoginService()),
-            updateController: UpdateController(startingUpdater: false), application: RecordingApplicationActivator())
+            updateController: UpdateController(startingUpdater: false), application: RecordingApplicationActivator(),
+            statusItemAutosaveName: Self.testStatusItemAutosaveName)
         controller.start()
         defer { controller.stop() }
         let button = try XCTUnwrap(controller.currentStatusButton)
@@ -328,7 +334,8 @@ final class MenuBarControllerTests: XCTestCase {
             preferences: preferences,
             launchAtLogin: LaunchAtLoginController(service: MenuBarControllerLoginService()),
             updateController: UpdateController(startingUpdater: false),
-            application: RecordingApplicationActivator()
+            application: RecordingApplicationActivator(),
+            statusItemAutosaveName: Self.testStatusItemAutosaveName
         )
         controller.start()
         defer { controller.stop() }
@@ -369,13 +376,15 @@ final class MenuBarControllerTests: XCTestCase {
             preferences: AppPreferences(defaults: defaults),
             launchAtLogin: LaunchAtLoginController(service: MenuBarControllerLoginService()),
             updateController: UpdateController(startingUpdater: false),
-            application: RecordingApplicationActivator()
+            application: RecordingApplicationActivator(),
+            statusItemAutosaveName: Self.testStatusItemAutosaveName
         )
         controller.start()
         defer { controller.stop() }
 
         let statusItem = try XCTUnwrap(controller.currentStatusItem)
-        XCTAssertEqual(statusItem.autosaveName, MenuBarController.statusItemAutosaveName)
+        XCTAssertEqual(MenuBarController.statusItemAutosaveName, "com.burakgon.aiusage.statusItem")
+        XCTAssertEqual(statusItem.autosaveName, Self.testStatusItemAutosaveName)
 
         controller.stop(removeStatusItem: false)
         XCTAssertTrue(controller.currentStatusItem === statusItem)

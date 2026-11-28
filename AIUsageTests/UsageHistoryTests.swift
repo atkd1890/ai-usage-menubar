@@ -31,7 +31,8 @@ import XCTest
         defer { defaults.removePersistentDomain(forName: suite) }
         let controller = MenuBarController(store: UsageStore(providers: [], availabilityChecker: FixedProviderAvailabilityChecker(installed: [])),
             preferences: AppPreferences(defaults: defaults), launchAtLogin: LaunchAtLoginController(),
-            updateController: UpdateController(startingUpdater: false))
+            updateController: UpdateController(startingUpdater: false),
+            statusItemAutosaveName: "com.burakgon.aiusage.test-host.statusItem")
         controller.start()
         defer { controller.stop() }
         controller.showAnalytics()

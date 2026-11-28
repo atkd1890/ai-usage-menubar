@@ -57,7 +57,10 @@ final class UsageStore {
     private let availabilityChecker: any ProviderAvailabilityChecking
     private var cadenceTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
+    private var providerRefreshTasks: [ProviderID: Task<Void, Never>] = [:]
     private var refreshGeneration = 0
+    private var providerRefreshGenerations: [ProviderID: Int] = [:]
+    private var batchRefreshID = 0
 
     init(
         providers: [any UsageProvider]? = nil,
@@ -99,6 +102,9 @@ final class UsageStore {
         cadenceTask?.cancel()
         cadenceTask = nil
         cancelRefresh()
+        for provider in ProviderID.allCases {
+            states[provider]?.isRefreshing = false
+        }
     }
 
     func setTrackedProviders(_ providers: Set<ProviderID>) {
@@ -107,6 +113,8 @@ final class UsageStore {
         let newlyEnabled = providers.subtracting(trackedProviderIDs)
         trackedProviderIDs = providers
         for provider in ProviderID.allCases where !providers.contains(provider) {
+            providerRefreshTasks.removeValue(forKey: provider)?.cancel()
+            providerRefreshGenerations[provider, default: 0] += 1
             states[provider]?.isRefreshing = false
         }
 
@@ -146,13 +154,61 @@ final class UsageStore {
         cadenceTask = makeCadenceTask(refreshImmediately: true)
     }
 
+    func refreshProvider(_ providerID: ProviderID) {
+        Task { [weak self] in
+            await self?.refresh(provider: providerID)
+        }
+    }
+
+    func refresh(provider providerID: ProviderID) async {
+        if let existing = providerRefreshTasks[providerID] {
+            await existing.value
+            return
+        }
+
+        guard providerID.isEnabledInBuild,
+              trackedProviderIDs.contains(providerID),
+              states[providerID]?.isToolInstalled != false,
+              states[providerID]?.isRefreshing != true,
+              let provider = providers.first(where: { $0.id == providerID }) else {
+            return
+        }
+
+        let globalGeneration = refreshGeneration
+        let providerGeneration = providerRefreshGenerations[providerID, default: 0] + 1
+        providerRefreshGenerations[providerID] = providerGeneration
+        states[providerID]?.isRefreshing = true
+
+        let task = Task { [weak self] in
+            let result = await Self.fetchResult(for: provider)
+            guard let self else { return }
+            guard !Task.isCancelled,
+                  self.refreshGeneration == globalGeneration,
+                  self.providerRefreshGenerations[providerID] == providerGeneration else {
+                if self.refreshGeneration == globalGeneration,
+                   self.providerRefreshGenerations[providerID] == providerGeneration {
+                    self.states[providerID]?.isRefreshing = false
+                }
+                return
+            }
+            self.applyFetchResults([result])
+        }
+        providerRefreshTasks[providerID] = task
+        await task.value
+        if refreshGeneration == globalGeneration,
+           providerRefreshGenerations[providerID] == providerGeneration {
+            providerRefreshTasks.removeValue(forKey: providerID)
+        }
+    }
+
     func refresh(providerIDs requestedProviderIDs: Set<ProviderID>? = nil) async {
         if let refreshTask {
             await refreshTask.value
             return
         }
 
-        refreshGeneration += 1
+        batchRefreshID += 1
+        let currentBatchID = batchRefreshID
         let generation = refreshGeneration
         let providers = self.providers
         let trackedProviderIDs = self.trackedProviderIDs
@@ -172,7 +228,12 @@ final class UsageStore {
                     (installedProviders?.contains(provider.id) ?? true)
             }
 
+            var expectedProviderGenerations: [ProviderID: Int] = [:]
             for provider in effectiveProviders {
+                self?.providerRefreshTasks.removeValue(forKey: provider.id)?.cancel()
+                let nextGeneration = (self?.providerRefreshGenerations[provider.id] ?? 0) + 1
+                self?.providerRefreshGenerations[provider.id] = nextGeneration
+                expectedProviderGenerations[provider.id] = nextGeneration
                 self?.states[provider.id]?.isRefreshing = true
             }
 
@@ -181,39 +242,46 @@ final class UsageStore {
             ) { group in
                 for provider in effectiveProviders {
                     group.addTask {
-                        do {
-                            return FetchResult(
-                                provider: provider.id,
-                                result: .success(try await provider.fetch())
-                            )
-                        } catch let failure as ProviderFailure {
-                            return FetchResult(
-                                provider: provider.id,
-                                result: .failure(failure)
-                            )
-                        } catch {
-                            return FetchResult(
-                                provider: provider.id,
-                                result: .failure(ProviderFailure(
-                                    .transient,
-                                    "\(provider.id.displayName) could not be refreshed."
-                                ))
-                            )
-                        }
+                        await Self.fetchResult(for: provider)
                     }
                 }
 
                 for await result in group {
-                    guard !Task.isCancelled, self?.refreshGeneration == generation else { continue }
+                    guard !Task.isCancelled,
+                          self?.refreshGeneration == generation,
+                          self?.providerRefreshGenerations[result.provider] == expectedProviderGenerations[result.provider] else {
+                        continue
+                    }
                     self?.applyFetchResults([result])
                 }
             }
-
         }
         refreshTask = task
         await task.value
-        if generation == refreshGeneration {
+        if currentBatchID == batchRefreshID {
             refreshTask = nil
+        }
+    }
+
+    private static func fetchResult(for provider: any UsageProvider) async -> FetchResult {
+        do {
+            return FetchResult(
+                provider: provider.id,
+                result: .success(try await provider.fetch())
+            )
+        } catch let failure as ProviderFailure {
+            return FetchResult(
+                provider: provider.id,
+                result: .failure(failure)
+            )
+        } catch {
+            return FetchResult(
+                provider: provider.id,
+                result: .failure(ProviderFailure(
+                    .transient,
+                    "\(provider.id.displayName) could not be refreshed."
+                ))
+            )
         }
     }
 
@@ -373,6 +441,10 @@ final class UsageStore {
         refreshGeneration += 1
         refreshTask?.cancel()
         refreshTask = nil
+        for (_, task) in providerRefreshTasks {
+            task.cancel()
+        }
+        providerRefreshTasks.removeAll()
     }
 
     private func makeCadenceTask(

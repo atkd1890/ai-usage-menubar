@@ -32,12 +32,25 @@ xcodebuild \
     CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO \
     build
 
+if [[ "${AI_USAGE_SKIP_OPEN:-0}" != "1" ]]; then
+    osascript -e 'if application id "com.burakgon.aiusage" is running then tell application id "com.burakgon.aiusage" to quit' >/dev/null 2>&1 || true
+    for _ in {1..30}; do
+        pgrep -x "AI Usage" >/dev/null 2>&1 || break
+        sleep 0.1
+    done
+fi
+
 mkdir -p "$install_directory"
 rm -rf "$installed_application"
 /usr/bin/ditto "$built_application" "$installed_application"
 
 lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 if [[ -x "$lsregister" ]]; then
+    shopt -s nullglob
+    for candidate in "$repository_directory"/DerivedData-*/Build/Products/*/"AI Usage.app"; do
+        "$lsregister" -u "$candidate" >/dev/null 2>&1 || true
+    done
+    shopt -u nullglob
     "$lsregister" -u "$built_application" >/dev/null 2>&1 || true
     "$lsregister" -f "$installed_application" >/dev/null 2>&1 || true
 fi
