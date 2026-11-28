@@ -601,8 +601,8 @@ enum ConfirmedSchemaCatalog {
             enums: [
                 "usageType": ["credits"],
                 "userType": [
-                    "personal_free", "personal_pro", "personal_ultra",
-                    "personal_professional_trial", "free", "pro", "ultra", "enterprise"
+                    "personal_free", "personal_standard", "personal_pro", "personal_ultra",
+                    "personal_professional_trial", "free", "standard", "pro", "ultra", "enterprise"
                 ]
             ]
         ),

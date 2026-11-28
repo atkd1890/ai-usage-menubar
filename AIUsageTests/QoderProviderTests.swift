@@ -4,6 +4,63 @@ import XCTest
 
 final class QoderProviderTests: XCTestCase {
     @MainActor
+    func testPersonalStandardUserTypeMapsToStandardWithoutSchemaDrift() throws {
+        let fixedNow = Date(timeIntervalSince1970: 1_795_109_000)
+        let usageJSON = """
+        {
+          "displayMode": "qoder",
+          "qoderUsage": {
+            "userType": "personal_standard",
+            "userQuota": {"total": 300, "used": 30, "remaining": 270, "percentage": 10}
+          }
+        }
+        """
+        let snapshot = try QoderProvider.map(
+            usage: HTTPResponse(statusCode: 200, headers: [:], body: Data(usageJSON.utf8)),
+            plan: nil,
+            email: nil,
+            credentialSource: "Qoder desktop",
+            historyID: "qoder-session:standard",
+            now: fixedNow
+        )
+        XCTAssertEqual(snapshot.planName, "Standard")
+        XCTAssertTrue(snapshot.diagnosticWarnings.isEmpty)
+    }
+
+    @MainActor
+    func testFreeAccountWithZeroUserQuotaShowsInactiveCreditsTileAndExpandableAddOnCredits() throws {
+        let fixedNow = Date(timeIntervalSince1970: 1_795_109_000)
+        let usageJSON = """
+        {
+          "displayMode": "qoder",
+          "qoderUsage": {
+            "userType": "personal_free",
+            "userQuota": {"total": 0, "used": 0, "remaining": 0, "percentage": 0},
+            "addOnQuota": {"total": 200, "used": 0, "remaining": 200, "percentage": 0}
+          }
+        }
+        """
+        let snapshot = try QoderProvider.map(
+            usage: HTTPResponse(statusCode: 200, headers: [:], body: Data(usageJSON.utf8)),
+            plan: nil,
+            email: nil,
+            credentialSource: "Qoder desktop",
+            historyID: "qoder-session:free",
+            now: fixedNow
+        )
+        XCTAssertEqual(snapshot.planName, "Free")
+        XCTAssertEqual(snapshot.windows.count, 1)
+        XCTAssertEqual(snapshot.windows[0].kind, .credits)
+        XCTAssertTrue(snapshot.windows[0].isInactive)
+        XCTAssertEqual(snapshot.windows[0].inactiveDetail, "No plan")
+        XCTAssertEqual(snapshot.usageDetails.map(\.id), ["qoder.addon.credits"])
+        XCTAssertEqual(snapshot.usageDetails.first?.value, "200 / 200 left")
+        XCTAssertNotNil(snapshot.usageDetails.first?.boundedProgress)
+        XCTAssertTrue(ProviderDetailsLayout.canExpand(snapshot))
+        XCTAssertTrue(snapshot.availableMenuBarItems.isEmpty)
+    }
+
+    @MainActor
     func testMapsQoderLiveUsageAndPlanSnapshot() async throws {
         let fixedNow = Date(timeIntervalSince1970: 1_795_109_000)
         let usageJSON = """

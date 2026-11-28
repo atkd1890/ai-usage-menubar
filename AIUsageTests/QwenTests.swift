@@ -72,8 +72,8 @@ final class QwenTests: XCTestCase {
         XCTAssertEqual(snapshot.windows.map(\.kind), [
             .daily,
             .weekly,
-            .additional(id: "qwen.daily_credits", title: "Video Credits"),
-            .additional(id: "qwen.image_generation", title: "Image Generation")
+            .additional(id: "qwen.daily_credits", title: "Video Daily"),
+            .additional(id: "qwen.image_generation", title: "Image Daily")
         ])
         XCTAssertEqual(snapshot.windows[0].usedPercent, 25, accuracy: 0.001)
         XCTAssertEqual(snapshot.windows[0].remainingCount, 150)
@@ -85,13 +85,13 @@ final class QwenTests: XCTestCase {
         XCTAssertEqual(snapshot.windows[1].resetsAt, Date(timeIntervalSince1970: 1_795_431_623))
 
         let videoCredits = snapshot.windows[2]
-        XCTAssertEqual(videoCredits.kind.title, "Video Credits")
+        XCTAssertEqual(videoCredits.kind.title, "Video Daily")
         XCTAssertEqual(videoCredits.usedPercent, 50, accuracy: 0.001)
         XCTAssertEqual(videoCredits.remainingCount, 20)
         XCTAssertEqual(videoCredits.limitCount, 40)
 
         let image = snapshot.windows[3]
-        XCTAssertEqual(image.kind.title, "Image Generation")
+        XCTAssertEqual(image.kind.title, "Image Daily")
         XCTAssertEqual(image.usedPercent, 20, accuracy: 0.001)
         XCTAssertEqual(image.remainingCount, 8)
         XCTAssertEqual(image.limitCount, 10)
@@ -99,7 +99,7 @@ final class QwenTests: XCTestCase {
         let rows = ProviderDetailsLayout.rows(snapshot.windows)
         XCTAssertEqual(rows.count, 2)
         XCTAssertEqual(rows.first?.map(\.kind), [.daily, .weekly])
-        XCTAssertEqual(rows.last?.map(\.kind.title), ["Video Credits", "Image Generation"])
+        XCTAssertEqual(rows.last?.map(\.kind.title), ["Video Daily", "Image Daily"])
         XCTAssertEqual(
             ProviderDetailsLayout.windows(snapshot, expanded: false).map(\.kind),
             [.daily, .weekly]
@@ -435,8 +435,8 @@ final class QwenTests: XCTestCase {
         XCTAssertEqual(snapshot.windows.map(\.kind), [
             .daily,
             .weekly,
-            .additional(id: "qwen.daily_credits", title: "Video Credits"),
-            .additional(id: "qwen.image_generation", title: "Image Generation")
+            .additional(id: "qwen.daily_credits", title: "Video Daily"),
+            .additional(id: "qwen.image_generation", title: "Image Daily")
         ])
         XCTAssertTrue(snapshot.windows[0].isInactive)
         XCTAssertFalse(snapshot.windows[1].isInactive)
@@ -496,7 +496,7 @@ final class QwenTests: XCTestCase {
         XCTAssertEqual(
             detailRows.map { $0.map(\.kind.title) },
             [
-                ["Video Credits", "Image Generation"],
+                ["Video Daily", "Image Daily"],
                 ["Qwen 4", "Qwen 4 Preview"]
             ]
         )

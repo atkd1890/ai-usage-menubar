@@ -544,6 +544,14 @@ actor QoderProvider: UsageProvider {
             warnings += ResponseSchemaWatch.confirmedJSONKeys(in: userQuota, provider: .qoder, endpoint: "Qoder quota")
             if let window = mapQuotaWindow(userQuota, kind: .credits, resetsAt: resetsAt) {
                 windows.append(window)
+            } else if QuotaDiscovery.number(userQuota["total"]) == 0 {
+                windows.append(QuotaWindow(
+                    kind: .credits,
+                    usedPercent: 0,
+                    resetsAt: nil,
+                    isInactive: true,
+                    inactiveDetail: "No plan"
+                ))
             }
         }
         var hasAddOnCredits = false
@@ -562,7 +570,7 @@ actor QoderProvider: UsageProvider {
             warnings += ResponseSchemaWatch.confirmedJSONKeys(in: orgPackage, provider: .qoder, endpoint: "Qoder quota")
             details.append(detail)
         }
-        if !windows.isEmpty && !hasAddOnCredits {
+        if windows.contains(where: { !$0.isInactive }) && !hasAddOnCredits {
             details.append(ProviderUsageDetail(
                 id: "qoder.addon.credits",
                 title: "Add-on Credits",
@@ -729,6 +737,7 @@ actor QoderProvider: UsageProvider {
         }
         switch raw.lowercased() {
         case "personal_professional_trial": return "Pro Trial"
+        case "personal_standard", "standard": return "Standard"
         case "personal_pro", "pro": return "Pro"
         case "personal_ultra", "ultra": return "Ultra"
         case "personal_free", "free": return "Free"

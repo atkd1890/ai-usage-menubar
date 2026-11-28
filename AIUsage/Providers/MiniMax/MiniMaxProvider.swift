@@ -977,7 +977,7 @@ actor MiniMaxProvider: UsageProvider {
            !windows.contains(where: { $0.kind.rawValue == "additional:minimax.design" }) {
             windows.append(mediaWalletWindow(
                 id: "minimax.design",
-                title: "Design",
+                title: "Design Monthly",
                 amount: designAmount,
                 planName: ProviderParsing.string(designWallet?["plan_name"]),
                 explicitTotal: nil,
@@ -988,7 +988,7 @@ actor MiniMaxProvider: UsageProvider {
            !windows.contains(where: { $0.kind.rawValue == "additional:minimax.hailuo" }) {
             windows.append(mediaWalletWindow(
                 id: "minimax.hailuo",
-                title: "Hailuo",
+                title: "Hailuo Monthly",
                 amount: hailuoAmount,
                 planName: ProviderParsing.string(hailuoEquityData?["memberName"])
                     ?? ProviderParsing.string(hailuoWallet?["plan_name"]),

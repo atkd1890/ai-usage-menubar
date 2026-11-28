@@ -328,11 +328,11 @@ enum QuotaKind: RawRepresentable, Codable, Hashable, Sendable {
         case .apiUsage: "API Usage"
         case .credits: "Credits"
         case .chat: "Monthly"
-        case .completions: "Completions"
-        case .claudePool: "3rd-party"
+        case .completions: "Completions Monthly"
+        case .claudePool: "3rd-party Session"
         case .claudePoolWeekly: "3rd-party Weekly"
         case .argonWeekly: "Argon"
-        case .firefly: "Firefly"
+        case .firefly: "Firefly Monthly"
         case .additional(_, let title): title
         }
     }
@@ -475,15 +475,15 @@ enum MenuBarMetricID: RawRepresentable, CaseIterable, Codable, Hashable, Identif
         case .autoUsage: "Auto Usage"
         case .apiUsage: "API Usage"
         case .chat: "Monthly"
-        case .completions: "Completions"
-        case .claudePool: "3rd-party"
+        case .completions: "Completions Monthly"
+        case .claudePool: "3rd-party Session"
         case .claudePoolWeekly: "3rd-party Weekly"
         case .argonWeekly: "Argon"
         case .additional(_, let title): title
         case .extraUsage: "Extra Usage"
         case .credits: "Credits"
         case .resets: "Resets"
-        case .firefly: "Firefly"
+        case .firefly: "Firefly Monthly"
         }
     }
 

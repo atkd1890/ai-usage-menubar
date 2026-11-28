@@ -1194,7 +1194,7 @@ actor QwenProvider: UsageProvider {
                     case "daily_credits":
                         if videoCreditsWindow == nil {
                             videoCreditsWindow = QuotaWindow(
-                                kind: .additional(id: "qwen.daily_credits", title: "Video Credits"),
+                                kind: .additional(id: "qwen.daily_credits", title: "Video Daily"),
                                 usedPercent: usedPercent,
                                 resetsAt: resetDate,
                                 remainingCount: balance,
@@ -1204,7 +1204,7 @@ actor QwenProvider: UsageProvider {
                     case "image_generation":
                         if imageGenerationWindow == nil {
                             imageGenerationWindow = QuotaWindow(
-                                kind: .additional(id: "qwen.image_generation", title: "Image Generation"),
+                                kind: .additional(id: "qwen.image_generation", title: "Image Daily"),
                                 usedPercent: usedPercent,
                                 resetsAt: resetDate,
                                 remainingCount: balance,
@@ -1247,14 +1247,14 @@ actor QwenProvider: UsageProvider {
             ),
             weeklyWindow,
             videoCreditsWindow ?? QuotaWindow(
-                kind: .additional(id: "qwen.daily_credits", title: "Video Credits"),
+                kind: .additional(id: "qwen.daily_credits", title: "Video Daily"),
                 usedPercent: 0,
                 resetsAt: nil,
                 isInactive: true,
                 inactiveDetail: "Not on plan"
             ),
             imageGenerationWindow ?? QuotaWindow(
-                kind: .additional(id: "qwen.image_generation", title: "Image Generation"),
+                kind: .additional(id: "qwen.image_generation", title: "Image Daily"),
                 usedPercent: 0,
                 resetsAt: nil,
                 isInactive: true,

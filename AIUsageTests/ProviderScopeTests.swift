@@ -17,7 +17,7 @@ final class ProviderScopeTests: XCTestCase {
         XCTAssertEqual(result.planName, "Free")
         XCTAssertEqual(result.windows.map(\.kind), [.chat, .completions])
         XCTAssertEqual(QuotaKind.chat.title, "Monthly")
-        XCTAssertEqual(QuotaKind.completions.title, "Completions")
+        XCTAssertEqual(QuotaKind.completions.title, "Completions Monthly")
         XCTAssertTrue(result.usageDetails.isEmpty)
         XCTAssertFalse(result.availableMenuBarItems.contains { $0.metric == .extraUsage })
         XCTAssertNil(result.billingUsage)
@@ -57,7 +57,7 @@ final class ProviderScopeTests: XCTestCase {
     func testProviderLabelsDescribeActualQuotaWithoutChangingPersistedIDs() {
         XCTAssertEqual(ProviderID.claude.displayName, "Claude")
         XCTAssertEqual(ProviderID.claude.rawValue, "claude")
-        XCTAssertEqual(QuotaKind.claudePool.title, "3rd-party")
+        XCTAssertEqual(QuotaKind.claudePool.title, "3rd-party Session")
         XCTAssertEqual(QuotaKind.claudePool.rawValue, "claudePool")
         XCTAssertEqual(QuotaKind.claudePoolWeekly.title, "3rd-party Weekly")
         let gemini = ProviderSnapshot(provider: .gemini, planName: nil, windows: [], fetchedAt: Date())

@@ -102,11 +102,11 @@ final class MiniMaxProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.windows[2].usedPercent, 15, accuracy: 0.01)
         XCTAssertEqual(snapshot.windows[2].remainingCount, 17)
         XCTAssertEqual(snapshot.windows[2].limitCount, 20)
-        XCTAssertEqual(snapshot.windows[3].kind, .additional(id: "minimax.design", title: "Design"))
+        XCTAssertEqual(snapshot.windows[3].kind, .additional(id: "minimax.design", title: "Design Monthly"))
         XCTAssertEqual(snapshot.windows[3].remainingCount, 420)
         XCTAssertEqual(snapshot.windows[3].limitCount, 1_000)
         XCTAssertEqual(snapshot.windows[3].usedPercent, 58, accuracy: 0.01)
-        XCTAssertEqual(snapshot.windows[4].kind, .additional(id: "minimax.hailuo", title: "Hailuo"))
+        XCTAssertEqual(snapshot.windows[4].kind, .additional(id: "minimax.hailuo", title: "Hailuo Monthly"))
         XCTAssertEqual(snapshot.windows[4].remainingCount, 350)
         XCTAssertEqual(snapshot.windows[4].limitCount, 1_000)
         XCTAssertEqual(snapshot.windows[4].usedPercent, 65, accuracy: 0.01)
@@ -144,8 +144,8 @@ final class MiniMaxProviderTests: XCTestCase {
         XCTAssertEqual(snapshot.windows.map(\.kind), [
             .session,
             .weekly,
-            .additional(id: "minimax.design", title: "Design"),
-            .additional(id: "minimax.hailuo", title: "Hailuo")
+            .additional(id: "minimax.design", title: "Design Monthly"),
+            .additional(id: "minimax.hailuo", title: "Hailuo Monthly")
         ])
         XCTAssertTrue(snapshot.windows.allSatisfy(\.isInactive))
         XCTAssertEqual(snapshot.windows[0].inactiveDetail, "No Token Plan")
