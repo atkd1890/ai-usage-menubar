@@ -19,7 +19,7 @@ final class MuseTests: XCTestCase {
     }
     func testCachedActionDoesNotRediscoverAndSendsOnlyReadOnlyBody() async throws {
         let http = MockHTTPClient([free, free])
-        let provider = MuseProvider(http: http, cookies: { "hatch_sess=synthetic; hatch_gw=gateway" },
+        let provider = MuseProvider(http: http, cookies: { "hatch_sess=synthetic; hatch_gw=gateway" }, action: nil,
             pageScripts: { _ in XCTFail("No discovery on working action"); return [] }, saveAction: { _ in })
         _ = try await provider.fetch(); _ = try await provider.fetch()
         let requests = await http.capturedRequests()
@@ -44,12 +44,60 @@ final class MuseTests: XCTestCase {
     }
     func testScriptScannerDiscardsInlineBootstrapAndExternalURLsAcrossChunkBoundaries() {
         var collector = MuseScriptSources()
-        for text in ["<html><scr", "ipt>private chat <script src='/_next/static/chunks/private.js'>", "</script><script src=\"/_next/static/chunks/app.js\"", "></script><script src='https://evil.test/_next/static/chunks/evil.js'></script>"] {
+        for text in [
+            "<html><scr",
+            "ipt>private chat <script src='/_next/static/chunks/private.js'>",
+            "</script><script src=\"/_next/static/chunks/app.js\"",
+            "></script><script src=\"/_next/static/immutable/chunks/1a4i9fvziyigq.js\"",
+            "></script><script src='https://evil.test/_next/static/chunks/evil.js'></script>"
+        ] {
             collector.consume(Data(text.utf8))
         }
-        XCTAssertEqual(collector.paths, ["/_next/static/chunks/app.js"])
+        XCTAssertEqual(collector.paths, [
+            "/_next/static/chunks/app.js",
+            "/_next/static/immutable/chunks/1a4i9fvziyigq.js"
+        ])
+        XCTAssertTrue(MuseScriptSources.allowed("/_next/static/immutable/chunks/1a4i9fvziyigq.js"))
         XCTAssertFalse(MuseScriptSources.allowed("/_next/static/chunks/../api/chat"))
+        XCTAssertFalse(MuseScriptSources.allowed("/_next/static/immutable/chunks/../api/chat"))
+        XCTAssertEqual(
+            MuseScriptSources.chunkPaths(in: #"["static/immutable/chunks/settings.js","static/chunks/other.js"]"#),
+            ["/_next/static/immutable/chunks/settings.js", "/_next/static/chunks/other.js"]
+        )
         XCTAssertNil(MuseProvider.actionID(in: "createServerReference(\"" + String(repeating: "a", count: 40) + "\",call,\"sendMessageAction\")"))
+    }
+    func testImmutableChunkLoaderRecoversFrom409RotatedActionWithoutAssetCookies() async throws {
+        let freshID = String(repeating: "c", count: 40)
+        let loaderChunk = #"[434304,e=>{e.v(t=>Promise.all(["static/immutable/chunks/settings.js"].map(t=>e.l(t))))}]"#
+        let appChunk = #"t.A(434304).then(({Settings:s})=>s)"#
+        let settingsChunk = "createServerReference(\"\(freshID)\",callServer,void 0,findSourceMapURL,\"fetchSubscriptionAction\")"
+        let http = RoutedHTTPClient([
+            "https://muse.ai/": [
+                httpResponse(409, json: #"{"error":"Server Action unavailable."}"#, headers: ["x-nextjs-action-not-found": "1"]),
+                free
+            ],
+            "https://muse.ai/_next/static/immutable/chunks/loader.js": [httpResponse(json: loaderChunk)],
+            "https://muse.ai/_next/static/immutable/chunks/app.js": [httpResponse(json: appChunk)],
+            "https://muse.ai/_next/static/immutable/chunks/settings.js": [httpResponse(json: settingsChunk)]
+        ])
+        let provider = MuseProvider(
+            http: http,
+            cookies: { "hatch_sess=synthetic; hatch_gw=gateway" },
+            action: String(repeating: "a", count: 40),
+            pageScripts: { _ in [
+                "/_next/static/immutable/chunks/loader.js",
+                "/_next/static/immutable/chunks/app.js"
+            ] },
+            saveAction: { _ in }
+        )
+        let snapshot = try await provider.fetch()
+        XCTAssertEqual(snapshot.planName, "Free")
+        let requests = await http.capturedRequests()
+        let chunkRequests = requests.filter { $0.url.path.hasPrefix("/_next/") }
+        XCTAssertEqual(chunkRequests.count, 3)
+        XCTAssertTrue(chunkRequests.allSatisfy { $0.headers["Cookie"] == nil })
+        let postActions = requests.filter { $0.method == .post }.compactMap { $0.headers["Next-Action"] }
+        XCTAssertEqual(postActions, [String(repeating: "a", count: 40), freshID])
     }
     func testMalformedNullAndRejectedResponsesDoNotBecomeFullAllowance() {
         for value in ["null", "true", "-1", "101"] {
@@ -78,7 +126,7 @@ final class MuseTests: XCTestCase {
             files: MemoryFiles(["~/Library/Application Support/Google/Chrome/Default/Cookies": ""])
         )
         let http = MockHTTPClient([free])
-        let provider = MuseProvider(http: http, method: { .chrome }, sessions: store, pageScripts: { _ in [] }, saveAction: { _ in })
+        let provider = MuseProvider(http: http, method: { .chrome }, sessions: store, action: nil, pageScripts: { _ in [] }, saveAction: { _ in })
         let snapshot = try await provider.fetch()
         XCTAssertEqual(snapshot.credentialSource, "Chrome Default")
         XCTAssertNotNil(snapshot.historyIdentity)

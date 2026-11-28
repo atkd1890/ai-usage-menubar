@@ -6,7 +6,7 @@ actor MuseProvider: UsageProvider {
     static let origin = "https://muse.ai"
     static let actionKey = "muse.subscriptionAction.v1"
     // Verified read-only subscription action; deployments can replace this ID.
-    static let verifiedAction = "40e0249eeae158685b6a8d0c3b203f53dd4f2c7d63"
+    static let verifiedAction = "406cd44441421b58cea8309747129141947de9f499"
     static let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
     private let http: any HTTPClient
     private let loadCookies: @Sendable () throws -> (cookie: String, sourceLabel: String)
@@ -43,7 +43,7 @@ actor MuseProvider: UsageProvider {
         }
         var extraWarnings: [ProviderDiagnosticWarning] = []
         var response = try await subscription(cookie: cookie, action: action)
-        if response.statusCode == 404 || response.header("x-nextjs-action-not-found") == "1" {
+        if [404, 409].contains(response.statusCode) || response.header("x-nextjs-action-not-found") == "1" {
             action = try await discover(cookie: cookie)
             response = try await subscription(cookie: cookie, action: action)
         }
@@ -77,7 +77,7 @@ actor MuseProvider: UsageProvider {
         ], body: Data(#"[{"includeAgreement":true}]"#.utf8)))
     }
     private func discover(cookie: String) async throws -> String {
-        let paths = Array(try await pageScripts(cookie).filter(MuseScriptSources.allowed).prefix(96))
+        let paths = Array(try await pageScripts(cookie).filter(MuseScriptSources.allowed).prefix(MuseScriptSources.maxScriptCount))
         var text = ""
         for offset in stride(from: 0, to: paths.count, by: 8) {
             for chunk in await fetchChunks(Array(paths[offset..<min(offset + 8, paths.count)])) {

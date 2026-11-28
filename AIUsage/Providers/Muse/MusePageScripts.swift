@@ -2,6 +2,7 @@ import Foundation
 
 /// Keeps only script src attributes. Inline bootstrap/chat payloads are discarded.
 struct MuseScriptSources {
+    static let maxScriptCount = 256
     private var buffer = ""
     private var insideScript = false
     private(set) var paths: [String] = []
@@ -27,10 +28,10 @@ struct MuseScriptSources {
     }
     static func allowed(_ path: String) -> Bool { allowedPath(path) }
     private static func allowedPath(_ path: String) -> Bool {
-        path.range(of: #"^/_next/static/chunks/[A-Za-z0-9_~.-]+\.js$"#, options: .regularExpression) != nil
+        path.range(of: #"^/_next/static/(?:immutable/)?chunks/[A-Za-z0-9_~.-]+\.js$"#, options: .regularExpression) != nil
     }
     static func chunkPaths(in text: String) -> [String] {
-        guard let regex = try? NSRegularExpression(pattern: #"static/chunks/[A-Za-z0-9_~.-]+\.js"#) else { return [] }
+        guard let regex = try? NSRegularExpression(pattern: #"static/(?:immutable/)?chunks/[A-Za-z0-9_~.-]+\.js"#) else { return [] }
         var seen = Set<String>()
         return regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap {
             guard let range = Range($0.range, in: text) else { return nil }
@@ -63,7 +64,7 @@ enum MusePageScripts {
             chunk.append(byte)
             if chunk.count >= 4096 {
                 collector.consume(chunk); chunk.removeAll(keepingCapacity: true)
-                if collector.paths.count >= 96 { break }
+                if collector.paths.count >= MuseScriptSources.maxScriptCount { break }
             }
         }
         collector.consume(chunk)
